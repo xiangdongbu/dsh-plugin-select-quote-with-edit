@@ -1,0 +1,76 @@
+{
+  "name": "dsh-plugin-select-quote-with-edit",
+  "version": "0.1.0",
+  "private": false,
+  "description": "DeepSeek Harness 客户端插件：划词引用（复制 / 添加到对话，chip 悬停预览）+ 消息悬停编辑（时间/编辑/复制，内联改后作为新消息发出）。",
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "quote",
+    "selection",
+    "edit"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/xiangdongbu/dsh-plugin-select-quote-with-edit.git"
+  },
+  "homepage": "https://github.com/xiangdongbu/dsh-plugin-select-quote-with-edit#readme",
+  "bugs": {
+    "url": "https://github.com/xiangdongbu/dsh-plugin-select-quote-with-edit/issues"
+  },
+  "type": "module",
+  "license": "MIT",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "verify": "node scripts/verify.mjs",
+    "check": "npm run typecheck && npm run build && npm run verify",
+    "build:mock": "node scripts/build-mock.mjs",
+    "mock": "npm run build && npm run build:mock && node scripts/serve-mock.mjs",
+    "sync:desktop": "node scripts/sync-desktop.mjs"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
+  },
+  "icon": "./icon.svg",
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/react": "~18.3.1",
+    "@types/react-dom": "~18.3",
+    "esbuild": "^0.25.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "typescript": "^5.4.0"
+  }
+}

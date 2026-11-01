@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>dsh-plugin-select-quote-with-edit · mock host</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #1d1e20;
+    color: #ececee;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    line-height: 22px;
+    -webkit-font-smoothing: antialiased;
+  }
+  body { --dsw-menu-surface-fill: rgba(42, 43, 46, 0.94); --dsw-menu-backdrop-filter: blur(40px) saturate(150%); }
+  .ds-app { min-height: 100vh; }
+  .ds-stream {
+    width: 760px;
+    margin: 0 auto;
+    padding: 28px 0 170px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .ds-assistant { line-height: 24px; margin: 10px 0; user-select: text; }
+  .ds-userRow { display: flex; flex-direction: column; align-items: flex-end; margin: 8px 0; }
+  .ds-bubble {
+    max-width: 76%;
+    padding: 10px 16px;
+    border-radius: 22px;
+    background: #37383c;
+    color: #ececee;
+    line-height: 22px;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    user-select: text;
+  }
+  .ds-bubbleRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .ds-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 9px;
+    border-radius: 9px;
+    background: rgba(127, 127, 127, 0.2);
+    border: 0.5px solid rgba(255, 255, 255, 0.14);
+    color: #d4d6da;
+    font-size: 12px;
+    line-height: 17px;
+  }
+  .ds-composerWrap { position: fixed; left: 0; right: 0; bottom: 18px; display: flex; justify-content: center; }
+  .ds-composerCard {
+    position: relative;
+    width: 760px;
+    border-radius: 22px;
+    background: #26272a;
+    box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 8px 28px rgba(0, 0, 0, 0.4);
+    display: flex;
+    flex-direction: column;
+  }
+  .ds-editor { min-height: 24px; padding: 12px 16px 6px; outline: none; user-select: text; }
+  .ds-editor:empty::before { content: attr(data-placeholder); color: #7c8085; }
+  .ds-composerRow { display: flex; align-items: center; gap: 10px; padding: 6px 12px 12px; }
+  .ds-iconBtn, .ds-modeBtn, .ds-modelBtn {
+    appearance: none; border: 0; background: transparent; color: #c9cbd0; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 13px;
+    padding: 4px 6px; border-radius: 8px;
+  }
+  .ds-modeBtn { color: #dd8629; }
+  .ds-iconBtn:hover, .ds-modeBtn:hover, .ds-modelBtn:hover { background: rgba(127, 127, 127, 0.16); }
+  .ds-send {
+    appearance: none; border: 0; width: 32px; height: 32px; border-radius: 50%;
+    background: #ffffff; color: #16171a; display: grid; place-items: center; cursor: pointer;
+  }
+  .ds-error {
+    margin: 40px auto; width: 560px; padding: 16px; border-radius: 12px;
+    background: #5b2027; color: #ffd9dd; font-size: 13px;
+  }
+</style>
+</head>
+<body data-ds-dark-theme="true">
+  <div id="root"></div>
+  <script>
+    window.__errors = [];
+    window.addEventListener('error', (event) => {
+      window.__errors.push(String((event && event.error) || event.message));
+    });
+    window.addEventListener('unhandledrejection', (event) => {
+      window.__errors.push('rejection: ' + String(event.reason));
+    });
+  </script>
+  <script src="./mock-host.js"></script>
+  <script src="../../lib/client.js"></script>
+</body>
+</html>

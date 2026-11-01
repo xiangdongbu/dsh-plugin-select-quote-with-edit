@@ -1,0 +1,53 @@
+/**
+ * Interface language follows the host: dictionaries go to `ctx.locale` and
+ * `t()` resolves against the user's active language every call.
+ */
+
+type Dict = Record<string, string>
+
+export const DICTIONARIES: Record<string, Dict> = {
+  zh: {
+    'toolbar.copy': '复制',
+    'toolbar.copied': '已复制',
+    'toolbar.add': '添加到对话',
+    'chip.remove': '删除引用',
+    'row.copy': '复制',
+    'row.copied': '已复制',
+    'row.edit': '编辑',
+    'editor.cancel': '取消',
+    'editor.send': '发送',
+    'editor.hint': '编辑后将从此处重新开始对话，已有产物不会被删除',
+    'editor.removeQuote': '删除引用',
+    'time.yesterday': '昨天',
+    'time.sameYear': '{m}月{d}日',
+    'time.otherYear': '{y}年{m}月{d}日',
+  },
+  en: {
+    'toolbar.copy': 'Copy',
+    'toolbar.copied': 'Copied',
+    'toolbar.add': 'Add to conversation',
+    'chip.remove': 'Remove quote',
+    'row.copy': 'Copy',
+    'row.copied': 'Copied',
+    'row.edit': 'Edit',
+    'editor.cancel': 'Cancel',
+    'editor.send': 'Send',
+    'editor.hint': 'Editing restarts the conversation from here; existing artifacts are kept.',
+    'editor.removeQuote': 'Remove quote',
+    'time.yesterday': 'Yesterday',
+    'time.sameYear': '{m}/{d}',
+    'time.otherYear': '{y}/{m}/{d}',
+  },
+}
+
+export const LOCALE_KEYS = Object.keys(DICTIONARIES.zh)
+
+let translate: (key: string) => string = (key) => DICTIONARIES.zh[key] ?? DICTIONARIES.en[key] ?? key
+
+export function bindLocale(options: { translate: (key: string) => string }): void {
+  translate = options.translate
+}
+
+export function t(key: string): string {
+  return translate(key)
+}
