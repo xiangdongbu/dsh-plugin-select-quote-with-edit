@@ -141,3 +141,55 @@ export async function copyText(text: string): Promise<boolean> {
     }
   }
 }
+
+export function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/**
+ * Copy with both flavors: `text/plain` carries the human-readable text,
+ * `text/html` can carry an invisible payload (e.g. our quote-data comment)
+ * for the plugin's own paste interceptor, without polluting what other apps
+ * see. Falls back to selecting a hidden rich node so the legacy copy path
+ * keeps the HTML flavor too.
+ */
+export async function copyRich(text: string, html: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.write && typeof ClipboardItem === 'function') {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/plain': new Blob([text], { type: 'text/plain' }),
+          'text/html': new Blob([html], { type: 'text/html' }),
+        }),
+      ])
+      return true
+    }
+  } catch {
+    // fall through to the legacy path
+  }
+  const selection = window.getSelection()
+  const saved =
+    selection !== null && selection.rangeCount > 0 ? selection.getRangeAt(0).cloneRange() : null
+  try {
+    const container = document.createElement('div')
+    container.setAttribute('contenteditable', 'true')
+    container.style.position = 'fixed'
+    container.style.left = '-9999px'
+    container.style.top = '0'
+    container.innerHTML = html
+    document.body.appendChild(container)
+    const range = document.createRange()
+    range.selectNodeContents(container)
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    const ok = document.execCommand('copy')
+    return ok
+  } catch {
+    return false
+  } finally {
+    if (saved !== null && selection !== null) {
+      selection.removeAllRanges()
+      selection.addRange(saved)
+    }
+  }
+}

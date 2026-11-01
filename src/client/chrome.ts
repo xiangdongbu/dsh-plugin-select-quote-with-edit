@@ -13,7 +13,7 @@ import { t } from './i18n.ts'
 import { getMessage } from './registry.ts'
 import { composeMessage, scanQuotes, type Quote } from './protocol.ts'
 import { runtime } from './runtime.ts'
-import { copyText } from './dom.ts'
+import { copyRich, escapeHtml } from './dom.ts'
 import { ensureStyles } from './styles.ts'
 import { SVG_PENCIL, SVG_COPY, SVG_CHECK, SVG_INFO, SVG_QUOTE, SVG_X } from './svg.ts'
 
@@ -125,7 +125,19 @@ async function copyMessage(): Promise<void> {
   const flowKey = actionsRow.getAttribute('data-chat-flow-key') ?? ''
   const entry = getMessage(flowKey)
   if (!entry) return
-  const ok = await copyText(scanQuotes(entry.raw).rest)
+  const scan = scanQuotes(entry.raw)
+  // Quotes ride along in the HTML flavor as an invisible comment: pasting
+  // into our composer restores them as pending chips (see paste.ts), while
+  // every other target just sees the display text.
+  const payload = scan.quotes.map((quote) => ({ text: quote.text }))
+  const marker =
+    payload.length > 0
+      ? `<!--dsh-quote-data:${JSON.stringify(payload)
+          .replace(/</g, '\\u003c')
+          .replace(/--/g, '\\u002d\\u002d')}-->`
+      : ''
+  const html = `${marker}<div style="white-space:pre-wrap">${escapeHtml(scan.rest)}</div>`
+  const ok = await copyRich(scan.rest, html)
   if (!ok || actionsRow === null) return
   copyBtn.innerHTML = SVG_CHECK
   copyBtn.title = t('row.copied')

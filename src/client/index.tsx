@@ -11,6 +11,7 @@ import { ComposerPanel } from './composer-panel.tsx'
 import { ComposerBridge } from './composer-bridge.tsx'
 import { UserMessageView } from './transcript.tsx'
 import { pickDelegate } from './host-node.ts'
+import { watchQuotePaste } from './paste.ts'
 
 /**
  * Browser half of dsh-plugin-select-quote-with-edit — the two features in one
@@ -44,6 +45,10 @@ export function apply(ctx: ClientContext): void {
 
   // Another tab wrote (or cleared) one of our session partitions: adopt it.
   ctx.effect(() => watchStorageAdoption(), 'select-quote-with-edit: storage adoption')
+
+  // Pasting copied message content into the composer restores its quotes as
+  // pending chips (the quotes ride in the clipboard's HTML flavor).
+  ctx.effect(() => watchQuotePaste(), 'select-quote-with-edit: quote paste')
 
   // Root: always-mounted selection toolbar. Root-scoped so transcript
   // selections are observed no matter which session or history view is up.

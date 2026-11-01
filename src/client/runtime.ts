@@ -1,10 +1,12 @@
 /**
- * Cross-slot runtime: the composer bridge publishes `inputActions` here so
- * the plain-DOM editor (chrome.ts) can write the edited text into the
- * resident composer and submit it as a new message. The panel also exposes
- * `markFolded` — the editor's write-back must set the fold guard, or the
- * rewind-restore path would read the just-composed protocol block out of the
- * draft and turn it back into pending quotes (racing the send).
+ * Cross-slot runtime: the composer bridge publishes `inputActions` (plus the
+ * current draft read) here so the plain-DOM editor (chrome.ts) can write the
+ * edited text into the resident composer and submit it as a new message, and
+ * the paste interceptor can fall back to appending when execCommand is
+ * unavailable. The panel also exposes `markFolded` — the editor's write-back
+ * must set the fold guard, or the rewind-restore path would read the
+ * just-composed protocol block out of the draft and turn it back into pending
+ * quotes (racing the send).
  */
 
 export interface ComposerActions {
@@ -14,7 +16,10 @@ export interface ComposerActions {
 export const runtime: {
   inputActions: ComposerActions | null
   markFolded: (() => void) | null
+  /** Latest composer draft, published by the bridge on every change. */
+  draft: string | null
 } = {
   inputActions: null,
   markFolded: null,
+  draft: null,
 }
