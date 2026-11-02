@@ -303,7 +303,22 @@ async function withdrawRow(row: HTMLElement): Promise<void> {
   } catch {
     outcome = { ok: false, refilled: false, reason: 'threw' }
   }
-  if (!outcome.ok) showUndoHint(t('undo.failed'))
+  if (!outcome.ok) {
+    showUndoHint(t('undo.failed'))
+    return
+  }
+  // Diagnostic: images were detected but none could be re-attached. (Also
+  // leaves details on window.__dsqeLastWithdraw for devtools inspection.)
+  try {
+    const debug = (globalThis as unknown as Record<string, unknown>).__dsqeLastWithdraw as
+      | { images?: number; restored?: number }
+      | undefined
+    if (debug !== undefined && (debug.images ?? 0) > 0 && (debug.restored ?? 0) === 0) {
+      showUndoHint('撤回完成，但图片未能还原')
+    }
+  } catch {
+    // diagnostics must never break the flow
+  }
 }
 
 function showActions(row: HTMLElement): void {

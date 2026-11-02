@@ -331,6 +331,12 @@ export async function withdrawMessage(deps: WithdrawDeps): Promise<WithdrawOutco
     if (images.length === 0) images = imagesOfKey(snapshot, deps.flowKey)
   }
   const scope = sessions?.scope?.(deps.sessionId)
+  // The conversation service is reached through the session-scoped context in
+  // the shipped code (e.g. ui-commands does `binding.ctx.get("conversation")`);
+  // the root ctx may not resolve it for a sibling plugin. Try scoped first.
+  const scopeLike = scope as { get?: (name: string) => unknown } | undefined
+  const scopedConversation = scopeLike?.get?.('conversation') as ConversationLike | undefined
+  const conversation = scopedConversation ?? deps.getConversation?.()
 
   // Dispatch the rewind, then write the draft in the same tick (before awaiting
   // the slow file-restore handler) so the composer updates instantly.
@@ -359,20 +365,30 @@ export async function withdrawMessage(deps: WithdrawDeps): Promise<WithdrawOutco
   // raced the rewind's session-view rebind, which dropped the fresh drafts —
   // that is why images went missing. Wait for the target row to disappear from
   // the (client) chat view first, then restore. Text refill above stays instant.
-  if (images.length > 0 && deps.getConversation !== undefined) {
+  const debug: Record<string, unknown> = {
+    seq,
+    images: images.length,
+    hasAddAttachments: deps.addAttachments !== undefined,
+    hasScope: scope !== undefined && scope !== null,
+    hasConversation: conversation !== undefined,
+    conversationFromScope: scopedConversation !== undefined,
+  }
+  ;(globalThis as unknown as Record<string, unknown>).__dsqeLastWithdraw = debug
+  if (images.length > 0 && conversation !== undefined) {
     try {
       await waitUntilHidden(deps.getUiConversation, deps.sessionId, seq, 2000)
-      await restoreImages(
+      debug.restored = await restoreImages(
         {
           sessionId: deps.sessionId,
           session,
           scope,
-          getConversation: deps.getConversation,
+          getConversation: () => conversation,
           ...(deps.addAttachments !== undefined ? { addAttachments: deps.addAttachments } : {}),
         },
         images,
       )
-    } catch {
+    } catch (error) {
+      debug.error = String(error)
       // image restore is best-effort
     }
   }
