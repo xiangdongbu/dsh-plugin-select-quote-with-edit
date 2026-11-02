@@ -42,6 +42,8 @@ export interface SessionLike {
   command?(line: string): Promise<CommandResult>
   /** Read a durable attachment's bytes (for restoring images on withdraw). */
   readAttachment?(attachmentId: string): Promise<AttachmentReadResult>
+  /** Page history backwards until the loaded window covers `seq`. */
+  loadThrough?(seq: number): unknown
 }
 
 export interface SessionsLike {
@@ -360,6 +362,17 @@ export async function withdrawMessage(deps: WithdrawDeps): Promise<WithdrawOutco
   }
   if (result?.ok !== true) return { ok: false, refilled, reason: 'command-rejected' }
   if (result.value?.matched === false) return { ok: false, refilled, reason: 'command-unmatched' }
+
+  // After a (possibly deep) rewind the transcript's loaded window can end up
+  // covering only the withdrawn "marker" rows, so the real history above the
+  // target is outside the window and the chat looks empty until「加载更早」.
+  // Page history back through the target so the pre-withdraw content shows.
+  try {
+    const loadThrough = session.loadThrough
+    if (typeof loadThrough === 'function') void loadThrough.call(session, seq)
+  } catch {
+    // history paging is best-effort
+  }
 
   // Restore images AFTER the rewind settles. Doing it before/with the command
   // raced the rewind's session-view rebind, which dropped the fresh drafts —
