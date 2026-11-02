@@ -510,7 +510,7 @@ check(
 {
   const wdir = mkdtempSync(join(tmpdir(), 'dsqe-withdraw-'))
   const withdraw = await compileModule('src/client/withdraw.ts', join(wdir, 'withdraw.cjs'))
-  const { withdrawMessage, seqOfKey, ENGINE_COMMAND } = withdraw
+  const { withdrawMessage, seqOfKey, imagesOfKey, restoreImages, ENGINE_COMMAND } = withdraw
   check('withdraw: engine command is the rewind plugin channel', ENGINE_COMMAND === 'rewind-plugin', ENGINE_COMMAND)
   const snapshot = { nodes: new Map([['k1', { data: { seq: 7 } }]]), order: ['k1'] }
   check('withdraw: seq resolves from the chat snapshot', seqOfKey(snapshot, 'k1') === 7)
@@ -592,6 +592,69 @@ check(
 
   const missing = await withdrawMessage({ ...deps, getSessions: () => undefined })
   check('withdraw: missing session service fails cleanly', missing.ok === false && missing.reason === 'no-session', JSON.stringify(missing))
+
+  // ---- image restore ----
+  const imageSnapshot = {
+    nodes: new Map([
+      [
+        'img1',
+        {
+          data: {
+            seq: 9,
+            content: [
+              { type: 'text', text: '看图' },
+              { type: 'image', attachment: { attachmentId: 'att-1', mediaType: 'image/png', name: 'a.png' } },
+              { type: 'image', attachment: { attachmentId: 'att-2', mediaType: 'image/jpeg' } },
+              { type: 'file', attachment: { attachmentId: 'att-3', mediaType: 'application/pdf' } },
+            ],
+          },
+        },
+      ],
+    ]),
+    order: ['img1'],
+  }
+  const imgs = imagesOfKey(imageSnapshot, 'img1')
+  check(
+    'withdraw: collects image blocks only (skips text/file)',
+    imgs.length === 2 && imgs[0].attachmentId === 'att-1' && imgs[1].mediaType === 'image/jpeg',
+    JSON.stringify(imgs),
+  )
+  {
+    const seen = { files: [], added: null, released: null }
+    const restoredCount = await restoreImages(
+      {
+        sessionId: 's1',
+        session: {
+          readAttachment: async (id) => ({ ok: true, value: { data: new Uint8Array([id === 'att-1' ? 1 : 2]) } }),
+        },
+        scope: { token: 'scope' },
+        getConversation: () => ({
+          input: { for: () => ({ addAttachments: (ids) => { seen.added = ids; return true } }) },
+          createDrafts: (_sid, files) => {
+            seen.files = files
+            return files.map((_f, i) => ({ id: `d${i}` }))
+          },
+          releaseDraftAttachments: (drafts) => {
+            seen.released = drafts
+          },
+        }),
+      },
+      imgs,
+    )
+    check(
+      'withdraw: restores images by reading bytes and adding drafts',
+      restoredCount === 2 && seen.files.length === 2 && seen.added?.join(',') === 'd0,d1',
+      JSON.stringify({ restoredCount, files: seen.files.length, added: seen.added }),
+    )
+    check('withdraw: restored image File keeps media type', seen.files[1]?.type === 'image/jpeg', seen.files[1]?.type)
+  }
+  {
+    const count = await restoreImages(
+      { sessionId: 's1', session: undefined, scope: undefined, getConversation: () => undefined },
+      imgs,
+    )
+    check('withdraw: image restore degrades to no-op without services', count === 0, String(count))
+  }
   rmSync(wdir, { recursive: true, force: true })
 }
 

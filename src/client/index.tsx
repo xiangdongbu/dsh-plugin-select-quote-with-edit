@@ -81,6 +81,7 @@ export function apply(ctx: ClientContext): void {
   const withdrawServices = {
     sessions: () => safeGet('sessions'),
     uiConversation: () => safeGet('uiConversation'),
+    conversation: () => safeGet('conversation'),
   }
   function ComposerBridgeWithServices(props: Record<string, unknown>) {
     return <ComposerBridge {...props} services={withdrawServices} />

@@ -250,6 +250,7 @@ const ctx = {
   get(name: string): unknown {
     if (name === 'sessions') return mockSessionsService
     if (name === 'uiConversation') return mockUiConversationService
+    if (name === 'conversation') return mockConversationService
     return undefined
   },
   slots: {
@@ -295,7 +296,7 @@ const ctx = {
 interface Msg {
   key: string
   role: 'user' | 'assistant'
-  content: { type: string; text: string }[]
+  content: { type: string; text?: string; attachment?: unknown }[]
   time?: number
   /** Log seq — mirrors the host's `node.data.seq` (used by the ↶ action). */
   seq?: number
@@ -314,11 +315,14 @@ const rewindAudit: {
   calls: number
 } = { lastSeq: null, lastMode: null, filesRestored: false, calls: 0 }
 
-function mockChatSnapshot(): { nodes: Map<string, { data: { seq?: number } }>; order: string[] } {
-  const nodes = new Map<string, { data: { seq?: number } }>()
+function mockChatSnapshot(): {
+  nodes: Map<string, { data: { seq?: number; content?: unknown } }>
+  order: string[]
+} {
+  const nodes = new Map<string, { data: { seq?: number; content?: unknown } }>()
   const order: string[] = []
   for (const message of liveMessages) {
-    nodes.set(message.key, { data: { seq: message.seq } })
+    nodes.set(message.key, { data: { seq: message.seq, content: message.content } })
     order.push(message.key)
   }
   return { nodes, order }
@@ -334,10 +338,41 @@ const mockUiConversationService = {
   },
 }
 
+const conversationAudit: { added: string[] | null; files: number; released: boolean } = {
+  added: null,
+  files: 0,
+  released: false,
+}
+const mockConversationService = {
+  input: {
+    for(): unknown {
+      return {
+        addAttachments(ids: string[]): boolean {
+          conversationAudit.added = ids
+          return true
+        },
+      }
+    },
+  },
+  createDrafts(_sessionId: string, files: File[]): { id: string }[] {
+    conversationAudit.files = files.length
+    return files.map((_file, index) => ({ id: `draft-${index}` }))
+  },
+  releaseDraftAttachments(): void {
+    conversationAudit.released = true
+  },
+}
+
 const mockSessionsService = {
+  scope(): unknown {
+    return { mock: true }
+  },
   binding(): unknown {
     return {
       session: {
+        async readAttachment(attachmentId: string): Promise<unknown> {
+          return { ok: true, value: { data: new Uint8Array([attachmentId.length]) } }
+        },
         async command(line: string): Promise<unknown> {
           const match = /^\/rewind-plugin\s+@(\d+)\s+(chat|both)\s*$/.exec(line.trim())
           if (match === null) return { ok: true, value: { matched: false } }
@@ -498,7 +533,13 @@ function App(): React.ReactNode {
     {
       key: 'm2',
       role: 'user',
-      content: [{ type: 'text', text: SEEDED_USER_WIRE }],
+      content: [
+        {
+          type: 'image',
+          attachment: { attachmentId: 'att-mock-1', mediaType: 'image/png', name: 'photo.png' },
+        },
+        { type: 'text', text: SEEDED_USER_WIRE },
+      ],
       time: SEEDED_TIME,
       seq: 2,
     },
@@ -724,6 +765,7 @@ function textNodeMap(host: Element): { node: Text; start: number; end: number }[
       hostEditInRow: document.querySelector('[data-clock="start"] .dsqe_hostEdit') !== null,
       hostUndoInRow: document.querySelector('[data-clock="start"] .dsqe_hostUndo') !== null,
       rewind: { ...rewindAudit },
+      attachments: { ...conversationAudit },
       pluginRowPad: document.querySelector('.dsqe_rowQuote') !== null,
       quoteBodyShown: document.querySelector('[data-dsqe-quote-bubble] .dsqe-quoteBody') !== null,
       chipXShown: document.querySelector('.dsqe-chipRow .dsqe-chip')?.getAttribute('data-x-shown') === 'true',

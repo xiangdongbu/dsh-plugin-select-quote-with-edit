@@ -32,16 +32,49 @@ export interface CommandResult {
   readonly error?: { readonly message?: string }
 }
 
+export interface AttachmentReadResult {
+  readonly ok?: boolean
+  readonly value?: { readonly data?: Uint8Array | ArrayBuffer }
+  readonly error?: unknown
+}
+
 export interface SessionLike {
   command?(line: string): Promise<CommandResult>
+  /** Read a durable attachment's bytes (for restoring images on withdraw). */
+  readAttachment?(attachmentId: string): Promise<AttachmentReadResult>
 }
 
 export interface SessionsLike {
   binding?(id: string): { session?: SessionLike } | undefined
+  /** Session scope handle, as passed to the composer's attachment API. */
+  scope?(id: string): unknown
+}
+
+/** A composer draft handle returned by `conversation.createDrafts`. */
+export interface DraftLike {
+  readonly id: string
+}
+
+export interface ComposerInputLike {
+  for(scope: unknown): { addAttachments(ids: readonly string[]): boolean }
+}
+
+/** The slice of the conversation service used to put images back in the composer. */
+export interface ConversationLike {
+  readonly input?: ComposerInputLike
+  createDrafts?(sessionId: string, files: readonly File[]): DraftLike[]
+  releaseDraftAttachments?(drafts: readonly DraftLike[]): void
+}
+
+/** One durable image reference carried by an `image` content block. */
+export interface ImageAttachmentRef {
+  readonly attachmentId: string
+  readonly mediaType: string
+  readonly name?: string
 }
 
 export interface ChatNodeLike {
-  readonly data?: { readonly seq?: number }
+  readonly data?: { readonly seq?: number; readonly content?: unknown }
   /** The rewind plugin's visibility layer hides shadowed rows in place. */
   readonly visibility?: 'visible' | 'hidden'
 }
@@ -97,6 +130,98 @@ export function seqOfKey(
   return undefined
 }
 
+/** Image references carried by a message node's `image` content blocks. */
+export function imagesOfKey(
+  snapshot: ChatSnapshotLike | undefined,
+  key: string,
+): ImageAttachmentRef[] {
+  const node = snapshot?.nodes?.get?.(key)
+  const content = node?.data?.content
+  if (!Array.isArray(content)) return []
+  const images: ImageAttachmentRef[] = []
+  for (const block of content) {
+    if (block === null || typeof block !== 'object') continue
+    const candidate = block as { type?: unknown; attachment?: unknown }
+    if (candidate.type !== 'image') continue
+    const attachment = candidate.attachment as
+      | { attachmentId?: unknown; mediaType?: unknown; name?: unknown }
+      | undefined
+    if (typeof attachment?.attachmentId !== 'string') continue
+    if (typeof attachment.mediaType !== 'string') continue
+    images.push({
+      attachmentId: attachment.attachmentId,
+      mediaType: attachment.mediaType,
+      ...(typeof attachment.name === 'string' ? { name: attachment.name } : {}),
+    })
+  }
+  return images
+}
+
+const IMAGE_MEDIA_EXTENSION: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+}
+
+export interface RestoreImagesDeps {
+  readonly sessionId: string
+  readonly session?: SessionLike
+  readonly scope: unknown
+  readonly getConversation: () => ConversationLike | undefined
+}
+
+/**
+ * Put a withdrawn message's images back into the composer: read each durable
+ * attachment's bytes, build Files, create drafts, and add their ids to the
+ * composer's attachment list (the same path the host uses to attach images).
+ *
+ * Returns the number of images re-attached (0 when unsupported/unavailable).
+ * Never throws.
+ */
+export async function restoreImages(
+  deps: RestoreImagesDeps,
+  images: readonly ImageAttachmentRef[],
+): Promise<number> {
+  if (images.length === 0) return 0
+  const { session } = deps
+  const conversation = deps.getConversation()
+  if (
+    session?.readAttachment === undefined ||
+    conversation?.input === undefined ||
+    conversation.createDrafts === undefined ||
+    deps.scope === undefined ||
+    deps.scope === null
+  ) {
+    return 0
+  }
+  const files: File[] = []
+  for (const [index, ref] of images.entries()) {
+    const extension = IMAGE_MEDIA_EXTENSION[ref.mediaType]
+    if (extension === undefined) continue
+    try {
+      const result = await session.readAttachment(ref.attachmentId)
+      if (result?.ok !== true || result.value?.data === undefined) continue
+      const name = ref.name ?? `image-${index + 1}.${extension}`
+      files.push(new File([result.value.data as BlobPart], name, { type: ref.mediaType }))
+    } catch {
+      // skip this image, keep the rest
+    }
+  }
+  if (files.length === 0) return 0
+  try {
+    const drafts = conversation.createDrafts(deps.sessionId, files)
+    const admitted = conversation.input.for(deps.scope).addAttachments(drafts.map((draft) => draft.id))
+    if (!admitted) {
+      conversation.releaseDraftAttachments?.(drafts)
+      return 0
+    }
+    return drafts.length
+  } catch {
+    return 0
+  }
+}
+
 export interface WithdrawDeps {
   readonly sessionId: string
   readonly flowKey: string
@@ -104,6 +229,8 @@ export interface WithdrawDeps {
   readonly anchorKey: string
   readonly getSessions: () => SessionsLike | undefined
   readonly getUiConversation: () => UiConversationLike | undefined
+  /** Conversation service (composer attachments) for image restore. */
+  readonly getConversation?: () => ConversationLike | undefined
   /** Raw wire text of the message (protocol block included), if known. */
   readonly getRaw: (flowKey: string) => string | undefined
   /** fallback seq recorded by the node view, when the snapshot is unavailable. */
@@ -140,10 +267,15 @@ export async function withdrawMessage(deps: WithdrawDeps): Promise<WithdrawOutco
   if (seq === undefined) seq = deps.getSeq?.(deps.flowKey)
   if (seq === undefined) return { ok: false, refilled: false, reason: 'no-seq' }
 
-  const session = deps.getSessions()?.binding?.(deps.sessionId)?.session
+  const sessions = deps.getSessions()
+  const session = sessions?.binding?.(deps.sessionId)?.session
   if (session?.command === undefined) {
     return { ok: false, refilled: false, reason: 'no-session' }
   }
+
+  // Read the message's images before the rewind hides the node.
+  let images = imagesOfKey(snapshot, deps.anchorKey)
+  if (images.length === 0) images = imagesOfKey(snapshot, deps.flowKey)
 
   // Dispatch the rewind, then write the draft in the same tick (before awaiting
   // the slow file-restore handler) so the composer updates instantly.
@@ -157,6 +289,19 @@ export async function withdrawMessage(deps: WithdrawDeps): Promise<WithdrawOutco
     } catch {
       // keep going: the rewind itself may still be useful
     }
+  }
+
+  // Put images back in the composer in the background (bytes are read async).
+  if (images.length > 0 && deps.getConversation !== undefined) {
+    void restoreImages(
+      {
+        sessionId: deps.sessionId,
+        session,
+        scope: sessions?.scope?.(deps.sessionId),
+        getConversation: deps.getConversation,
+      },
+      images,
+    )
   }
 
   let result: CommandResult

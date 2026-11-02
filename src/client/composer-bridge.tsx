@@ -3,20 +3,22 @@ import { runtime, type ComposerActions } from './runtime.ts'
 import { getMessage } from './registry.ts'
 import {
   withdrawMessage,
+  type ConversationLike,
   type SessionsLike,
   type UiConversationLike,
   type WithdrawOutcome,
 } from './withdraw.ts'
 
 /**
- * Lazy accessors into the two host services the ↶ withdraw needs. They are
+ * Lazy accessors into the host services the ↶ withdraw needs. They are
  * resolved at click time (not at apply time) so a service that mounts slightly
- * later is still picked up, and so the mock harness (which provides neither)
+ * later is still picked up, and so the mock harness (which provides none)
  * simply reports "unavailable" instead of throwing.
  */
 export interface WithdrawServices {
   readonly sessions?: () => unknown
   readonly uiConversation?: () => unknown
+  readonly conversation?: () => unknown
 }
 
 /**
@@ -51,6 +53,7 @@ export function ComposerBridge(props: {
               anchorKey,
               getSessions: () => services?.sessions?.() as SessionsLike | undefined,
               getUiConversation: () => services?.uiConversation?.() as UiConversationLike | undefined,
+              getConversation: () => services?.conversation?.() as ConversationLike | undefined,
               getRaw: (key) => getMessage(key)?.raw,
               getSeq: (key) => getMessage(key)?.seq,
               setDraft: (text) => {
