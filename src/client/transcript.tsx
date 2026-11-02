@@ -3,6 +3,7 @@ import { scanQuotes, type ParsedQuote } from './protocol.ts'
 import { QuoteChip, type QuoteLike } from './chip.tsx'
 import { pickDelegate } from './host-node.ts'
 import { registerMessage } from './registry.ts'
+import { ensureHostButtons } from './chrome.ts'
 import type { UserMessageProps } from './context.d.ts'
 import { ensureStyles } from './styles.ts'
 
@@ -99,7 +100,12 @@ export function UserMessageView(
     // Quote bubbles have no host action row, so reserve the action-row height
     // permanently (see .dsqe_rowQuote). Constant height = no layout jump when
     // the hover row shows/hides.
-    row.classList.toggle('dsqe_rowQuote', scanQuotes(raw).quotes.length > 0)
+    const isQuote = scanQuotes(raw).quotes.length > 0
+    row.classList.toggle('dsqe_rowQuote', isQuote)
+    // Plain messages: place edit + undo next to the native copy button up
+    // front (not only after the first hover), so they are always present and
+    // inherit the host's own reveal transition — synced with the copy button.
+    if (!isQuote) ensureHostButtons(row)
   }, [raw, time, seq])
 
   const scanned = scanQuotes(raw)

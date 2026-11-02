@@ -35,8 +35,6 @@ let timeEl: HTMLElement | null = null
 let editBtn: HTMLButtonElement | null = null
 let copyBtn: HTMLButtonElement | null = null
 let undoBtn: HTMLButtonElement | null = null
-let hostEditBtn: HTMLButtonElement | null = null
-let hostUndoBtn: HTMLButtonElement | null = null
 let actionsRow: HTMLElement | null = null
 let hideTimer: number | null = null
 let copiedTimer: number | null = null
@@ -143,44 +141,44 @@ function buildActions(): void {
   actionsEl.append(timeEl, copyBtn, editBtn, undoBtn)
 }
 
-/**
- * The pencil + undo pair for the host's own actions row — separate singletons
- * from the plugin row's buttons, so both can coexist (an always-visible tail
- * row plus a hovered quote row elsewhere). Each row is resolved at click time
- * via closest(), so the same element works wherever it is injected.
- */
-function buildHostButtons(): void {
-  hostEditBtn = document.createElement('button')
-  hostEditBtn.type = 'button'
-  hostEditBtn.className = 'dsqe_iconBtn dsqe_hostEdit'
-  hostEditBtn.title = t('row.edit')
-  hostEditBtn.setAttribute('aria-label', t('row.edit'))
-  hostEditBtn.innerHTML = SVG_PENCIL
-  hostEditBtn.addEventListener('click', () => {
-    const row = hostEditBtn?.closest(FLOW_ITEM)
-    if (row instanceof HTMLElement) startEdit(row)
-  })
+const HOST_EDIT_ATTR = 'data-dsqe-host-edit'
+const HOST_UNDO_ATTR = 'data-dsqe-host-undo'
 
-  hostUndoBtn = document.createElement('button')
-  hostUndoBtn.type = 'button'
-  hostUndoBtn.className = 'dsqe_iconBtn dsqe_hostEdit dsqe_hostUndo'
-  hostUndoBtn.title = t('row.undo')
-  hostUndoBtn.setAttribute('aria-label', t('row.undo'))
-  hostUndoBtn.innerHTML = SVG_UNDO
-  hostUndoBtn.addEventListener('click', () => {
-    const row = hostUndoBtn?.closest(FLOW_ITEM)
-    if (row instanceof HTMLElement) void withdrawRow(row)
+/**
+ * One host-row button. These are PER-ROW elements (not shared singletons), so
+ * every message carries its own edit/undo next to the native copy button and
+ * all rows can show them at once. They are appended inside the host's own
+ * `[data-clock]` actions container, so they inherit the host's hover-reveal
+ * opacity exactly like the copy button (appear/fade together, never removed by
+ * us). The target row is resolved at click time via closest().
+ */
+function makeHostButton(kind: 'edit' | 'undo'): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className =
+    kind === 'edit' ? 'dsqe_iconBtn dsqe_hostEdit' : 'dsqe_iconBtn dsqe_hostEdit dsqe_hostUndo'
+  const label = kind === 'edit' ? t('row.edit') : t('row.undo')
+  button.title = label
+  button.setAttribute('aria-label', label)
+  button.innerHTML = kind === 'edit' ? SVG_PENCIL : SVG_UNDO
+  button.setAttribute(kind === 'edit' ? HOST_EDIT_ATTR : HOST_UNDO_ATTR, 'true')
+  button.addEventListener('click', () => {
+    const row = button.closest(FLOW_ITEM)
+    if (!(row instanceof HTMLElement)) return
+    if (kind === 'edit') startEdit(row)
+    else void withdrawRow(row)
   })
+  return button
 }
 
 /**
- * The host action the pencil anchors to: the built-in copy button — the
- * row's first foreign button. A Tooltip wrapper (if any) around it is part of
- * the visual unit, so the pencil sits after the wrapper instead of inside it.
+ * The host action our buttons anchor to: the built-in copy button — the row's
+ * first non-plugin button. A Tooltip wrapper (if any) around it is part of the
+ * visual unit, so the pair sits after the wrapper instead of inside it.
  */
 function copyUnitOf(host: HTMLElement): HTMLElement | null {
   for (const button of host.querySelectorAll('button')) {
-    if (button === hostEditBtn || button === hostUndoBtn) continue
+    if (button.hasAttribute(HOST_EDIT_ATTR) || button.hasAttribute(HOST_UNDO_ATTR)) continue
     const parent = button.parentElement
     return parent !== null && parent !== host && parent instanceof HTMLElement ? parent : button
   }
@@ -188,33 +186,46 @@ function copyUnitOf(host: HTMLElement): HTMLElement | null {
 }
 
 /**
- * Inject the pencil + undo into the row's host actions row, if the host
- * rendered one. Returns false for quote rows (plugin-drawn bubble, no host
- * row) so the caller falls back to the plugin row. The pair always sits right
- * after the copy button — a fixed spot, not "wherever the row ends": React may
- * rebuild or reshuffle the row (dropping or displacing the foreign buttons), so
- * every call re-checks the position and moves them back if needed.
+ * Ensure the row's host actions container carries the edit + undo buttons.
+ * Returns false for quote rows (plugin-drawn bubble, no host `[data-clock]`
+ * row) so the caller falls back to the plugin-drawn row. Idempotent and
+ * self-healing: after a React rebuild drops the foreign buttons it re-creates
+ * and re-places them right after the copy control. Never hides/removes them —
+ * the host's own reveal transition owns their visibility, so they stay in sync
+ * with the native copy button.
  */
-function ensureEditInHostRow(row: HTMLElement): boolean {
+export function ensureHostButtons(row: HTMLElement): boolean {
   if (editingRow !== null) return false
   const host = row.querySelector(HOST_ACTIONS)
   if (!(host instanceof HTMLElement)) return false
-  if (hostEditBtn === null || hostUndoBtn === null) buildHostButtons()
+  let edit = host.querySelector<HTMLButtonElement>(`[${HOST_EDIT_ATTR}]`)
+  let undo = host.querySelector<HTMLButtonElement>(`[${HOST_UNDO_ATTR}]`)
+  if (edit === null) edit = makeHostButton('edit')
+  if (undo === null) undo = makeHostButton('undo')
   const unit = copyUnitOf(host)
   if (unit === null) {
-    if (hostEditBtn!.parentElement !== host) host.appendChild(hostEditBtn!)
-    if (hostUndoBtn!.parentElement !== host) host.appendChild(hostUndoBtn!)
+    if (edit.parentElement !== host) host.appendChild(edit)
+    if (undo.parentElement !== host) host.appendChild(undo)
     return true
   }
   const placed =
-    hostEditBtn!.parentElement === host &&
-    hostEditBtn!.previousElementSibling === unit &&
-    hostUndoBtn!.parentElement === host &&
-    hostEditBtn!.nextElementSibling === hostUndoBtn
+    edit.parentElement === host &&
+    edit.previousElementSibling === unit &&
+    undo.parentElement === host &&
+    edit.nextElementSibling === undo
   if (placed) return true
-  unit.after(hostEditBtn!)
-  hostEditBtn!.after(hostUndoBtn!)
+  unit.after(edit)
+  edit.after(undo)
   return true
+}
+
+/** Drop every host-row button this plugin injected (teardown only). */
+function removeAllHostButtons(): void {
+  for (const button of document.querySelectorAll(
+    `[${HOST_EDIT_ATTR}], [${HOST_UNDO_ATTR}]`,
+  )) {
+    button.remove()
+  }
 }
 
 async function copyMessage(): Promise<void> {
@@ -308,13 +319,10 @@ function showActions(row: HTMLElement): void {
   if (actionsRow === row) return
   hideActionsImmediate()
   // The host already provides the actions row for delegated (plain) messages:
-  // just add the pencil + undo to it. Track the row so leaving it removes the
-  // extra buttons again — otherwise a hovered row keeps the full row forever
-  // (the host's own time/copy row stays, ours must follow its reveal).
-  if (ensureEditInHostRow(row)) {
-    actionsRow = row
-    return
-  }
+  // add the pencil + undo to it. They are NOT removed on leave — they live in
+  // the host's own `[data-clock]` container, so the host's reveal transition
+  // shows/hides them together with the native copy button (same sync).
+  if (ensureHostButtons(row)) return
   // Quote bubbles are plugin-drawn with no host row: keep the plugin's own
   // action row (time / copy / edit / undo) under the bubble. The row already
   // reserves this height via .dsqe_rowQuote, so showing the overlay never
@@ -330,10 +338,6 @@ function showActions(row: HTMLElement): void {
 function hideActionsImmediate(): void {
   actionsEl?.remove()
   if (actionsEl !== null) actionsEl.dataset.shown = 'false'
-  // Remove the host-row buttons too: the resting state must match the native
-  // row (time + copy only, exactly as before the plugin), reappearing on hover.
-  hostEditBtn?.remove()
-  hostUndoBtn?.remove()
   actionsRow = null
 }
 
@@ -636,10 +640,10 @@ export function watchMessageChrome(): () => void {
     if (!(event instanceof PointerEvent)) return
     lastPointer.x = event.clientX
     lastPointer.y = event.clientY
-    // Cheap re-injection while the pointer travels a marked row: React may
-    // have rebuilt the host actions row and dropped the pencil mid-hover.
+    // Cheap self-heal while the pointer travels a marked row: React may have
+    // rebuilt the host actions row and dropped our buttons mid-hover.
     const row = rowOf(event.target)
-    if (row !== null && row !== actionsRow) ensureEditInHostRow(row)
+    if (row !== null) ensureHostButtons(row)
   }
   const onBlur = (): void => {
     if (editingRow === null) hideActionsImmediate()
@@ -656,10 +660,7 @@ export function watchMessageChrome(): () => void {
     window.removeEventListener('blur', onBlur)
     exitEdit()
     hideActionsImmediate()
-    hostEditBtn?.remove()
-    hostEditBtn = null
-    hostUndoBtn?.remove()
-    hostUndoBtn = null
+    removeAllHostButtons()
     hideTipNow()
     if (hideTimer !== null) window.clearTimeout(hideTimer)
     if (copiedTimer !== null) window.clearTimeout(copiedTimer)
