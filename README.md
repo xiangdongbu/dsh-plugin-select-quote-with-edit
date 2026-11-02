@@ -1,9 +1,10 @@
 # dsh-plugin-select-quote-with-edit
 
-[DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/guide/quickstart)（dsh）的客户端插件，把「划词引用」与「消息编辑」合成一个插件：
+[DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/guide/quickstart)（dsh）的客户端插件，把「划词引用」「消息编辑」「消息撤回」合成一个插件：
 
 - **划词引用**：选中对话文字，浮出「复制 / 添加到对话」；引用以 chip 进入输入框与已发送气泡，悬停查看全文
 - **消息编辑**：悬停自己发送的消息，在气泡下方的悬停操作行里出现「编辑」；内联编辑后作为一条新消息发出
+- **消息撤回**：编辑按钮后面再加一个「撤回」↶ 图标，一键回退该消息及其之后的内容、还原本轮改过的文件，并把原文（含引用 chip）填回输入框
 
 ![悬停操作行](assets/screenshot-1-hover.png)
 
@@ -26,6 +27,13 @@
 - **发送为新消息**：写回输入框并触发宿主自己的发送手势（带折叠守卫，不与撤回还原竞态）；引用原样保留
 
 ![内联编辑](assets/screenshot-2-editor.png)
+
+### 消息撤回
+
+- **编辑按钮后的 ↶ 图标**：普通消息把「撤回」注入宿主悬停操作行，紧跟在「编辑」之后（时间 + 复制 + 编辑 + 撤回）；带引用的气泡在插件自绘操作行里同样排在「编辑」之后
+- **一条消息的三种撤回**：点一下，目标消息及其之后的内容从模型上下文与渲染对话中撤回；本轮被工具改过的文件按检查点还原；被撤回消息的原文自动填回输入框，改完可直接重发
+- **引用胶囊原样保留**：带引用的消息撤回后，协议块回填输入框时会被自动拆回**待发引用 chip**——和撤回前一样显示为引用胶囊，正文也回到编辑器
+- **依赖回退引擎**：撤回的「对话回退 + 文件还原」由同机安装的 [`dsh-rewind-plugin`](https://github.com/SiriLee/dsh-rewind) 提供（内部 `/rewind-plugin @<seq> both` 命令）；未安装时按钮会提示撤回失败，不影响其余功能
 
 ## 安装
 
@@ -56,11 +64,11 @@ dsh web --patch "$PWD/dev.patch.yml"
 ## 本地验证
 
 ```bash
-npm run check        # typecheck + build + 38 项无头校验
+npm run check        # typecheck + build + 48 项无头校验
 npm run mock         # mock 宿主 + http://127.0.0.1:4173/test/mock/app.html
 ```
 
-mock 宿主复刻 dsh web 客户端 DOM 约定（composer 卡片、lexical 编辑器、flow-key 消息行、宿主悬停操作行、发送回显、slot 注册表），并内置 priority -10 的模拟消息插件视图（`?fakequote=1`）验证委托共存。已验证：划词工具条、复制（已复制反馈）、添加到对话（单条不重复）、输入框 chip 悬停删除、发送折叠与回显剥离、气泡 chip 回显、悬停操作行（普通消息编辑按钮注入宿主行 + 引用气泡插件行）、内联编辑、编辑卡 × 替换图标（宽度不变）、移除引用后发送、保留引用发送、无引用插件环境独立运行。
+mock 宿主复刻 dsh web 客户端 DOM 约定（composer 卡片、lexical 编辑器、flow-key 消息行、宿主悬停操作行、发送回显、slot 注册表），并内置 priority -10 的模拟消息插件视图（`?fakequote=1`）验证委托共存；`sessions` / `uiConversation` 服务则模拟回退引擎执行 `/rewind-plugin @<seq> both`。已验证：划词工具条、复制（已复制反馈）、添加到对话（单条不重复）、输入框 chip 悬停删除、发送折叠与回显剥离、气泡 chip 回显、悬停操作行（普通消息编辑 + 撤回按钮注入宿主行 + 引用气泡插件行）、内联编辑、编辑卡 × 替换图标（宽度不变）、移除引用后发送、保留引用发送、撤回（移除消息 + 定位 seq + `both` 模式还原文件 + 原文回填 + 引用胶囊还原）、无引用插件环境独立运行。
 
 ## 消息协议
 
@@ -79,14 +87,16 @@ Each item in the block below is text the user selected ...
 
 ## 实现要点（详见 [docs/internals.md](docs/internals.md)）
 
-- 一个浏览器模块承载两套功能，`user` / `steering` 消息节点以 `priority: -20` 接管：挂 `display: contents` 标记（供悬停 chrome 定位与原文注册）、引用消息自绘 chip 气泡、普通消息委托宿主视图
+- 一个浏览器模块承载三套功能，`user` / `steering` 消息节点以 `priority: -20` 接管：挂 `display: contents` 标记（供悬停 chrome 定位与原文注册）、引用消息自绘 chip 气泡、普通消息委托宿主视图
 - 划词工具条、输入框 chip 行、悬停操作行、内联编辑器分别挂 `shell.overlay` 与 `conversation.input.overlay`；编辑器经 bridge 拿到宿主 `inputActions`，发送前先置折叠守卫再写草稿，避免撤回还原竞态
+- 消息撤回经 bridge 拿到宿主 `sessions` / `uiConversation`：从 chat 快照按 anchor key 解析消息 `seq`，调用回退引擎的 `/rewind-plugin @<seq> both`（对话回退 + 文件还原），再把原文写回 `inputActions`；协议块由输入框面板自动拆回待发引用 chip
 - 全部样式一个前缀（`dsqe-`），深浅色跟随产品的 `body[data-ds-dark-theme]`
 
 ## 已知限制
 
-- 普通消息的「编辑」注入宿主悬停操作行（`data-clock="start"` 钩子）；宿主若改动该结构，自动回退为插件自绘操作行
-- 带引用的气泡由插件绘制，宿主的悬停动作行不可用，插件自绘「时间 + 复制 + 编辑」；普通消息零改动
+- 普通消息的「编辑 / 撤回」注入宿主悬停操作行（`data-clock="start"` 钩子）；宿主若改动该结构，自动回退为插件自绘操作行
+- 带引用的气泡由插件绘制，宿主的悬停动作行不可用，插件自绘「时间 + 复制 + 编辑 + 撤回」；普通消息零改动
+- 「撤回」的对话回退与文件还原依赖同机安装的 `dsh-rewind-plugin`（其内部命令 `/rewind-plugin @<seq> both`）；未安装时点击撤回会提示失败
 - 主动斷开旧的两个插件才能避免功能重复
 
 ## License

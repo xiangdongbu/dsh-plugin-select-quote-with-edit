@@ -247,6 +247,11 @@ const ctx = {
   effect(fn: () => unknown): unknown {
     return fn()
   },
+  get(name: string): unknown {
+    if (name === 'sessions') return mockSessionsService
+    if (name === 'uiConversation') return mockUiConversationService
+    return undefined
+  },
   slots: {
     inject(_name: string, register: () => void): void {
       register()
@@ -292,12 +297,73 @@ interface Msg {
   role: 'user' | 'assistant'
   content: { type: string; text: string }[]
   time?: number
+  /** Log seq — mirrors the host's `node.data.seq` (used by the ↶ action). */
+  seq?: number
+}
+
+// ---------------------------------------------------------------- mock rewind bridge
+// Stands in for `dsh-rewind-plugin` so the ↶ hover action can be exercised
+// end-to-end: its internal `/rewind-plugin @<seq> <mode>` command drops the
+// target message (and every later one) and records that files were restored.
+let liveMessages: Msg[] = []
+let applyRewind: ((seq: number) => void) | null = null
+const rewindAudit: {
+  lastSeq: number | null
+  lastMode: 'chat' | 'both' | null
+  filesRestored: boolean
+  calls: number
+} = { lastSeq: null, lastMode: null, filesRestored: false, calls: 0 }
+
+function mockChatSnapshot(): { nodes: Map<string, { data: { seq?: number } }>; order: string[] } {
+  const nodes = new Map<string, { data: { seq?: number } }>()
+  const order: string[] = []
+  for (const message of liveMessages) {
+    nodes.set(message.key, { data: { seq: message.seq } })
+    order.push(message.key)
+  }
+  return { nodes, order }
+}
+
+const mockUiConversationService = {
+  binding(): unknown {
+    return {
+      target(): unknown {
+        return { getSnapshot: () => mockChatSnapshot() }
+      },
+    }
+  },
+}
+
+const mockSessionsService = {
+  binding(): unknown {
+    return {
+      session: {
+        async command(line: string): Promise<unknown> {
+          const match = /^\/rewind-plugin\s+@(\d+)\s+(chat|both)\s*$/.exec(line.trim())
+          if (match === null) return { ok: true, value: { matched: false } }
+          const seq = Number(match[1])
+          const mode = match[2] as 'chat' | 'both'
+          rewindAudit.lastSeq = seq
+          rewindAudit.lastMode = mode
+          rewindAudit.filesRestored = mode === 'both'
+          rewindAudit.calls += 1
+          applyRewind?.(seq)
+          return { ok: true, value: { matched: true } }
+        },
+      },
+    }
+  },
 }
 
 function MessageRow({ msg }: { msg: Msg }): React.ReactNode {
   if (msg.role === 'assistant') {
     return (
-      <div className="ds-assistant" data-chat-flow-key={msg.key}>
+      <div
+        className="ds-assistant"
+        data-chat-flow-key={msg.key}
+        data-chat-anchor-key={msg.key}
+        data-chat-flow-kind="assistant"
+      >
         {textOfContent(msg.content)}
       </div>
     )
@@ -307,13 +373,20 @@ function MessageRow({ msg }: { msg: Msg }): React.ReactNode {
     | undefined
   if (NodeView) {
     return (
-      <div data-chat-flow-key={msg.key}>
-        <NodeView node={{ data: { content: msg.content, time: msg.time ?? Date.now() } }} />
+      <div data-chat-flow-key={msg.key} data-chat-anchor-key={msg.key} data-chat-flow-kind="user">
+        <NodeView
+          node={{ data: { content: msg.content, time: msg.time ?? Date.now(), seq: msg.seq } }}
+        />
       </div>
     )
   }
   return (
-    <div className="ds-userRow" data-chat-flow-key={msg.key}>
+    <div
+      className="ds-userRow"
+      data-chat-flow-key={msg.key}
+      data-chat-anchor-key={msg.key}
+      data-chat-flow-kind="user"
+    >
       <div className="ds-bubble">{textOfContent(msg.content)}</div>
     </div>
   )
@@ -421,10 +494,30 @@ function App(): React.ReactNode {
   const [ready, setReady] = useState(false)
   const [failed, setFailed] = useState<string | null>(null)
   const [messages, setMessages] = useState<Msg[]>([
-    { key: 'm1', role: 'assistant', content: [{ type: 'text', text: ASSISTANT_SEED }] },
-    { key: 'm2', role: 'user', content: [{ type: 'text', text: SEEDED_USER_WIRE }], time: SEEDED_TIME },
+    { key: 'm1', role: 'assistant', content: [{ type: 'text', text: ASSISTANT_SEED }], seq: 1 },
+    {
+      key: 'm2',
+      role: 'user',
+      content: [{ type: 'text', text: SEEDED_USER_WIRE }],
+      time: SEEDED_TIME,
+      seq: 2,
+    },
   ])
   const [echo, setEcho] = useState<string | null>(null)
+
+  // Publish the live transcript for the mock rewind bridge and expose the
+  // surface cut it performs (drop the target message and every later one).
+  useEffect(() => {
+    liveMessages = messages
+  }, [messages])
+  useEffect(() => {
+    applyRewind = (seq: number): void => {
+      setMessages((previous) => previous.filter((message) => (message.seq ?? 0) < seq))
+    }
+    return () => {
+      applyRewind = null
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -466,12 +559,12 @@ function App(): React.ReactNode {
       setEcho(null)
       setMessages((previous) => [
         ...previous,
-        { key: nextKey(), role: 'user', content: [{ type: 'text', text: raw }], time: Date.now() },
+        { key: nextKey(), role: 'user', content: [{ type: 'text', text: raw }], time: Date.now(), seq: messageCounter },
       ])
       window.setTimeout(() => {
         setMessages((previous) => [
           ...previous,
-          { key: nextKey(), role: 'assistant', content: [{ type: 'text', text: ASSISTANT_REPLY }] },
+          { key: nextKey(), role: 'assistant', content: [{ type: 'text', text: ASSISTANT_REPLY }], seq: messageCounter },
         ])
       }, 400)
     }, 500)
@@ -579,6 +672,18 @@ function textNodeMap(host: Element): { node: Text; start: number; end: number }[
     el.dispatchEvent(new MouseEvent('click', opts))
     return true
   },
+  /** Click the ↶ undo button inside `flowKey`'s host row (or plugin row). */
+  pressUndo(flowKey: string): boolean {
+    const row = document.querySelector(`[data-chat-flow-key="${flowKey}"]`)
+    if (!row) return false
+    const button =
+      row.querySelector('.dsqe_hostUndo') ??
+      row.querySelector('.dsqe_undoBtn') ??
+      row.querySelector('[data-clock="start"] button:last-child')
+    if (!(button instanceof HTMLElement)) return false
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    return true
+  },
   hover(selector: string): boolean {
     const el = document.querySelector(selector)
     if (!el) return false
@@ -617,6 +722,8 @@ function textNodeMap(host: Element): { node: Text; start: number; end: number }[
       draft: JSON.stringify(draftStore.draft),
       actionShown: document.querySelector('.dsqe_actions')?.getAttribute('data-shown') ?? null,
       hostEditInRow: document.querySelector('[data-clock="start"] .dsqe_hostEdit') !== null,
+      hostUndoInRow: document.querySelector('[data-clock="start"] .dsqe_hostUndo') !== null,
+      rewind: { ...rewindAudit },
       pluginRowPad: document.querySelector('.dsqe_rowPad') !== null,
       timeText: document.querySelector('.dsqe_time')?.textContent ?? null,
       actionGap: (() => {

@@ -468,6 +468,81 @@ check(
   'editor card is content-sized (fit-content)',
   clientCode.includes('fit-content'),
 )
+check(
+  'undo (撤回) button ships next to edit + host injection',
+  clientCode.includes('dsqe_hostUndo') &&
+    clientCode.includes('dsqe_undoBtn') &&
+    clientCode.includes('rewind-plugin') &&
+    clientCode.includes('data-chat-anchor-key'),
+)
+
+// ---------------------------------------------------------------- withdraw engine
+{
+  const wdir = mkdtempSync(join(tmpdir(), 'dsqe-withdraw-'))
+  const withdraw = await compileModule('src/client/withdraw.ts', join(wdir, 'withdraw.cjs'))
+  const { withdrawMessage, seqOfKey, ENGINE_COMMAND } = withdraw
+  check('withdraw: engine command is the rewind plugin channel', ENGINE_COMMAND === 'rewind-plugin', ENGINE_COMMAND)
+  const snapshot = { nodes: new Map([['k1', { data: { seq: 7 } }]]), order: ['k1'] }
+  check('withdraw: seq resolves from the chat snapshot', seqOfKey(snapshot, 'k1') === 7)
+  check('withdraw: unknown key has no seq', seqOfKey(snapshot, 'nope') === undefined)
+
+  const wire = 'block\n<dsh-quotes>\n[{"text":"引用"}]\n</dsh-quotes>\n\n1233'
+  let cmd = null
+  let draft = null
+  const deps = {
+    sessionId: 's1',
+    flowKey: 'k1',
+    anchorKey: 'k1',
+    getSessions: () => ({
+      binding: () => ({
+        session: {
+          command: async (line) => {
+            cmd = line
+            return { ok: true, value: { matched: true } }
+          },
+        },
+      }),
+    }),
+    getUiConversation: () => ({ binding: () => ({ target: () => ({ getSnapshot: () => snapshot }) }) }),
+    getRaw: () => wire,
+    setDraft: (text) => {
+      draft = text
+    },
+    sleep: async () => {},
+    waitMs: 0,
+  }
+  const ok = await withdrawMessage(deps)
+  check(
+    'withdraw: invokes /rewind-plugin @<seq> both',
+    cmd === '/rewind-plugin @7 both',
+    String(cmd),
+  )
+  check('withdraw: reports ok + refilled and restores the raw wire text', ok.ok === true && ok.refilled === true && draft === wire)
+  check(
+    'withdraw: refilled quote block unfolds back into pending quotes',
+    (() => {
+      const restored = protocol.readComposedDraft(draft)
+      return restored !== null && restored.quotes.length === 1 && restored.rest.includes('1233')
+    })(),
+  )
+
+  const noSeq = await withdrawMessage({
+    ...deps,
+    getUiConversation: () => ({ binding: () => ({ target: () => ({ getSnapshot: () => ({ nodes: new Map() }) }) }) }),
+    setDraft: () => {},
+  })
+  check('withdraw: no seq fails without refilling', noSeq.ok === false && noSeq.reason === 'no-seq', JSON.stringify(noSeq))
+
+  const rejected = await withdrawMessage({
+    ...deps,
+    getSessions: () => ({ binding: () => ({ session: { command: async () => ({ ok: false }) } }) }),
+  })
+  check('withdraw: rejected command fails', rejected.ok === false && rejected.reason === 'command-rejected', JSON.stringify(rejected))
+
+  const missing = await withdrawMessage({ ...deps, getSessions: () => undefined })
+  check('withdraw: missing session service fails cleanly', missing.ok === false && missing.reason === 'no-session', JSON.stringify(missing))
+  rmSync(wdir, { recursive: true, force: true })
+}
 
 // ---------------------------------------------------------------- host half
 {

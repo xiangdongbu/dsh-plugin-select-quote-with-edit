@@ -63,8 +63,28 @@ export function apply(ctx: ClientContext): void {
     )
   })
 
-  // Session: composer bridge (publishes inputActions for the editor) and the
-  // pending quote chips.
+  // Session: composer bridge (publishes inputActions for the editor, and the
+  // ↶ withdraw engine) and the pending quote chips.
+  // The withdraw engine talks to `sessions` (run the rewind command) and
+  // `uiConversation` (resolve the message seq from the chat snapshot); both are
+  // resolved lazily so a missing service degrades to a no-op instead of
+  // breaking apply().
+  const safeGet = (name: string): unknown => {
+    try {
+      const direct = (ctx as unknown as Record<string, unknown>)[name]
+      if (direct !== undefined) return direct
+      return typeof ctx.get === 'function' ? ctx.get(name) : undefined
+    } catch {
+      return undefined
+    }
+  }
+  const withdrawServices = {
+    sessions: () => safeGet('sessions'),
+    uiConversation: () => safeGet('uiConversation'),
+  }
+  function ComposerBridgeWithServices(props: Record<string, unknown>) {
+    return <ComposerBridge {...props} services={withdrawServices} />
+  }
   ctx.slots.inject('conversation.input.overlay', () => {
     ctx.slots.register(
       {
@@ -72,7 +92,7 @@ export function apply(ctx: ClientContext): void {
         id: 'select-quote-with-edit-bridge',
         order: 1,
       },
-      ComposerBridge,
+      ComposerBridgeWithServices,
     )
   })
   ctx.slots.inject('conversation.input.overlay', () => {

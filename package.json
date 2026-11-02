@@ -1,8 +1,8 @@
 {
   "name": "dsh-plugin-select-quote-with-edit",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": false,
-  "description": "DeepSeek Harness 客户端插件：划词引用（复制 / 添加到对话，chip 悬停预览）+ 消息悬停编辑（编辑按钮并入悬停操作行，内联改后作为新消息发出）。",
+  "description": "DeepSeek Harness 客户端插件：划词引用（复制 / 添加到对话，chip 悬停预览）+ 消息悬停编辑（编辑按钮并入悬停操作行，内联改后作为新消息发出）+ 消息撤回（↶ 图标回退消息并还原本轮改过的文件，原文与引用 chip 回填输入框）。",
   "keywords": [
     "deepseek",
     "deepseek-harness",
@@ -10,7 +10,9 @@
     "dsh-plugin",
     "quote",
     "selection",
-    "edit"
+    "edit",
+    "rewind",
+    "undo"
   ],
   "repository": {
     "type": "git",

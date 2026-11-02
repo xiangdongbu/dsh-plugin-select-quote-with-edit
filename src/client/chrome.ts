@@ -4,13 +4,15 @@
  * Hovering a user message row (tagged by the node view's `data-dsqe-user`
  * marker) surfaces the edit affordance. Plain messages delegate to the host's
  * own actions row (`MessageIconActions`, clock + copy): the plugin injects its
- * pencil button right after the copy control instead of floating a second
- * row. Quote bubbles are plugin-drawn and come with no host row, so they keep
- * the plugin's own action row (time / copy / edit) below the bubble.
- * 「编辑」 replaces the bubble with an inline editor (quote chips + editable
- * text + hint + 取消/发送). 「发送」 writes the re-composed wire text into the
- * resident composer and triggers its own send gesture, so the edit lands as a
- * new message through the host's ordinary submit path.
+ * pencil + undo buttons right after the copy control instead of floating a
+ * second row. Quote bubbles are plugin-drawn and come with no host row, so
+ * they keep the plugin's own action row (time / copy / edit / undo) below the
+ * bubble. 「编辑」 replaces the bubble with an inline editor (quote chips +
+ * editable text + hint + 取消/发送). 「发送」 writes the re-composed wire text
+ * into the resident composer and triggers its own send gesture, so the edit
+ * lands as a new message through the host's ordinary submit path. 「撤回」
+ * rewinds the message (and the files its turn touched) and refills the composer
+ * with the original wire text (quote chips restored) — see withdraw.ts.
  */
 
 import { t } from './i18n.ts'
@@ -19,7 +21,7 @@ import { composeMessage, scanQuotes, type Quote } from './protocol.ts'
 import { runtime } from './runtime.ts'
 import { copyRich, escapeHtml } from './dom.ts'
 import { ensureStyles } from './styles.ts'
-import { SVG_PENCIL, SVG_COPY, SVG_CHECK, SVG_INFO, SVG_QUOTE, SVG_X } from './svg.ts'
+import { SVG_PENCIL, SVG_COPY, SVG_CHECK, SVG_INFO, SVG_QUOTE, SVG_X, SVG_UNDO } from './svg.ts'
 
 const FLOW_ITEM = '[data-chat-flow-key]'
 const COMPOSER_CARD = '[data-composer-card]'
@@ -32,7 +34,9 @@ let actionsEl: HTMLElement | null = null
 let timeEl: HTMLElement | null = null
 let editBtn: HTMLButtonElement | null = null
 let copyBtn: HTMLButtonElement | null = null
+let undoBtn: HTMLButtonElement | null = null
 let hostEditBtn: HTMLButtonElement | null = null
+let hostUndoBtn: HTMLButtonElement | null = null
 let actionsRow: HTMLElement | null = null
 let hideTimer: number | null = null
 let copiedTimer: number | null = null
@@ -126,16 +130,26 @@ function buildActions(): void {
     void copyMessage()
   })
 
-  actionsEl.append(timeEl, copyBtn, editBtn)
+  undoBtn = document.createElement('button')
+  undoBtn.type = 'button'
+  undoBtn.className = 'dsqe_iconBtn dsqe_undoBtn'
+  undoBtn.title = t('row.undo')
+  undoBtn.setAttribute('aria-label', t('row.undo'))
+  undoBtn.innerHTML = SVG_UNDO
+  undoBtn.addEventListener('click', () => {
+    if (actionsRow !== null) void withdrawRow(actionsRow)
+  })
+
+  actionsEl.append(timeEl, copyBtn, editBtn, undoBtn)
 }
 
 /**
- * The pencil for the host's own actions row — separate singleton from the
- * plugin row's edit button, so both can coexist (an always-visible tail row
- * plus a hovered quote row elsewhere). The row is resolved at click time via
- * closest(), so the same element works wherever it is injected.
+ * The pencil + undo pair for the host's own actions row — separate singletons
+ * from the plugin row's buttons, so both can coexist (an always-visible tail
+ * row plus a hovered quote row elsewhere). Each row is resolved at click time
+ * via closest(), so the same element works wherever it is injected.
  */
-function buildHostEditButton(): void {
+function buildHostButtons(): void {
   hostEditBtn = document.createElement('button')
   hostEditBtn.type = 'button'
   hostEditBtn.className = 'dsqe_iconBtn dsqe_hostEdit'
@@ -146,6 +160,17 @@ function buildHostEditButton(): void {
     const row = hostEditBtn?.closest(FLOW_ITEM)
     if (row instanceof HTMLElement) startEdit(row)
   })
+
+  hostUndoBtn = document.createElement('button')
+  hostUndoBtn.type = 'button'
+  hostUndoBtn.className = 'dsqe_iconBtn dsqe_hostEdit dsqe_hostUndo'
+  hostUndoBtn.title = t('row.undo')
+  hostUndoBtn.setAttribute('aria-label', t('row.undo'))
+  hostUndoBtn.innerHTML = SVG_UNDO
+  hostUndoBtn.addEventListener('click', () => {
+    const row = hostUndoBtn?.closest(FLOW_ITEM)
+    if (row instanceof HTMLElement) void withdrawRow(row)
+  })
 }
 
 /**
@@ -155,7 +180,7 @@ function buildHostEditButton(): void {
  */
 function copyUnitOf(host: HTMLElement): HTMLElement | null {
   for (const button of host.querySelectorAll('button')) {
-    if (button === hostEditBtn) continue
+    if (button === hostEditBtn || button === hostUndoBtn) continue
     const parent = button.parentElement
     return parent !== null && parent !== host && parent instanceof HTMLElement ? parent : button
   }
@@ -163,25 +188,32 @@ function copyUnitOf(host: HTMLElement): HTMLElement | null {
 }
 
 /**
- * Inject the pencil into the row's host actions row, if the host rendered
- * one. Returns false for quote rows (plugin-drawn bubble, no host row) so the
- * caller falls back to the plugin row. The pencil always sits right after the
- * copy button — a fixed spot, not "wherever the row ends": React may rebuild
- * or reshuffle the row (dropping or displacing the foreign button), so every
- * call re-checks the position and moves the button back if needed.
+ * Inject the pencil + undo into the row's host actions row, if the host
+ * rendered one. Returns false for quote rows (plugin-drawn bubble, no host
+ * row) so the caller falls back to the plugin row. The pair always sits right
+ * after the copy button — a fixed spot, not "wherever the row ends": React may
+ * rebuild or reshuffle the row (dropping or displacing the foreign buttons), so
+ * every call re-checks the position and moves them back if needed.
  */
 function ensureEditInHostRow(row: HTMLElement): boolean {
   if (editingRow !== null) return false
   const host = row.querySelector(HOST_ACTIONS)
   if (!(host instanceof HTMLElement)) return false
-  if (hostEditBtn === null) buildHostEditButton()
+  if (hostEditBtn === null || hostUndoBtn === null) buildHostButtons()
   const unit = copyUnitOf(host)
   if (unit === null) {
     if (hostEditBtn!.parentElement !== host) host.appendChild(hostEditBtn!)
+    if (hostUndoBtn!.parentElement !== host) host.appendChild(hostUndoBtn!)
     return true
   }
-  if (hostEditBtn!.parentElement === host && hostEditBtn!.previousElementSibling === unit) return true
+  const placed =
+    hostEditBtn!.parentElement === host &&
+    hostEditBtn!.previousElementSibling === unit &&
+    hostUndoBtn!.parentElement === host &&
+    hostEditBtn!.nextElementSibling === hostUndoBtn
+  if (placed) return true
   unit.after(hostEditBtn!)
+  hostEditBtn!.after(hostUndoBtn!)
   return true
 }
 
@@ -215,6 +247,54 @@ async function copyMessage(): Promise<void> {
   }, 1200)
 }
 
+/** Transient floating hint under the composer (withdraw failures). */
+function showUndoHint(text: string): void {
+  const hint = document.createElement('div')
+  hint.className = 'dsqe_undoHint'
+  hint.setAttribute('role', 'status')
+  hint.textContent = text
+  const card = document.querySelector(COMPOSER_CARD)
+  const rect = card instanceof HTMLElement ? card.getBoundingClientRect() : null
+  hint.style.position = 'fixed'
+  hint.style.left = `${Math.round(rect?.left ?? 16)}px`
+  hint.style.bottom = `${Math.round(window.innerHeight - (rect?.top ?? window.innerHeight) + 8)}px`
+  hint.style.zIndex = '2147483000'
+  hint.style.padding = '8px 12px'
+  hint.style.borderRadius = '8px'
+  hint.style.fontSize = '12px'
+  hint.style.color = '#fff'
+  hint.style.background = 'rgba(0, 0, 0, 0.78)'
+  hint.style.pointerEvents = 'none'
+  document.body.appendChild(hint)
+  window.setTimeout(() => hint.remove(), 3200)
+}
+
+/**
+ * 撤回 the message in `row`: rewind the conversation + touched files and put the
+ * original wire text back into the composer (the quote block unfolds back into
+ * pending chips). The rewind engine lives behind `runtime.withdraw`, published
+ * by the composer bridge.
+ */
+async function withdrawRow(row: HTMLElement): Promise<void> {
+  const flowKey = row.getAttribute('data-chat-flow-key') ?? ''
+  // The chat snapshot is keyed by the anchor key; for ordinary user rows it is
+  // the same value as the flow key, but read it explicitly to stay aligned.
+  const anchorKey = row.getAttribute('data-chat-anchor-key') ?? flowKey
+  const withdraw = runtime.withdraw
+  hideActionsImmediate()
+  if (withdraw === null) {
+    showUndoHint(t('undo.failed'))
+    return
+  }
+  let outcome: Awaited<ReturnType<typeof withdraw>>
+  try {
+    outcome = await withdraw(flowKey, anchorKey)
+  } catch {
+    outcome = { ok: false, refilled: false, reason: 'threw' }
+  }
+  if (!outcome.ok) showUndoHint(t('undo.failed'))
+}
+
 function showActions(row: HTMLElement): void {
   if (editingRow !== null) return
   if (!row.classList.contains('dsqe_row')) return
@@ -228,11 +308,11 @@ function showActions(row: HTMLElement): void {
   if (actionsRow === row) return
   hideActionsImmediate()
   // The host already provides the single actions row for delegated (plain)
-  // messages: no plugin row, no hover padding — just add the pencil to it.
+  // messages: no plugin row, no hover padding — just add the pencil + undo to it.
   row.classList.remove('dsqe_rowPad')
   if (ensureEditInHostRow(row)) return
   // Quote bubbles are plugin-drawn with no host row: keep the plugin's own
-  // action row (time / edit / copy) under the bubble.
+  // action row (time / copy / edit / undo) under the bubble.
   if (actionsEl === null) buildActions()
   timeEl!.textContent = formatTime(entry.time)
   timeEl!.style.display = timeEl!.textContent === '' ? 'none' : ''
@@ -571,6 +651,8 @@ export function watchMessageChrome(): () => void {
     hideActionsImmediate()
     hostEditBtn?.remove()
     hostEditBtn = null
+    hostUndoBtn?.remove()
+    hostUndoBtn = null
     hideTipNow()
     if (hideTimer !== null) window.clearTimeout(hideTimer)
     if (copiedTimer !== null) window.clearTimeout(copiedTimer)

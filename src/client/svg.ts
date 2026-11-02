@@ -15,3 +15,9 @@ export const SVG_QUOTE =
   '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="1.8" y="2.8" width="12.4" height="10.4" rx="2.6" stroke="currentColor" stroke-width="1.3"/><path d="M6.1 6.2c-.85 0-1.45.6-1.45 1.42 0 .78.55 1.34 1.3 1.34.06 0 .13 0 .19-.01-.2.62-.63 1.05-1.24 1.25l.42.83c1.25-.38 2.08-1.45 2.08-2.87 0-1.16-.55-1.96-1.3-1.96Z" fill="currentColor"/><path d="M10.4 6.2c-.85 0-1.45.6-1.45 1.42 0 .78.55 1.34 1.3 1.34.06 0 .13 0 .19-.01-.2.62-.63 1.05-1.24 1.25l.42.83c1.25-.38 2.08-1.45 2.08-2.87 0-1.16-.55-1.96-1.3-1.96Z" fill="currentColor"/></svg>'
 export const SVG_X =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>'
+/**
+ * 撤回（rewind / undo）——一道向左回转的箭头，与「编辑」铅笔、宿主复制图标同一
+ * 线性风格。
+ */
+export const SVG_UNDO =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h9.5a5.5 5.5 0 0 1 0 11H10"/></svg>'

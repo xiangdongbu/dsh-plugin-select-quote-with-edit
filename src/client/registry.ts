@@ -13,6 +13,8 @@
 export interface MessageEntry {
   readonly raw: string
   readonly time?: number
+  /** Log seq of the message, when the host exposes it (for ↶ withdraw). */
+  readonly seq?: number
 }
 
 const registry = new Map<string, MessageEntry>()

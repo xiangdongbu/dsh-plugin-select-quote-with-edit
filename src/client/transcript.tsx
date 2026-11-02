@@ -79,6 +79,7 @@ export function UserMessageView(
   const { node, delegateOf, kind, ...rest } = props
   const raw = contentBlocksToText(node?.data?.content)
   const time = typeof node?.data?.time === 'number' ? node.data.time : undefined
+  const seq = typeof node?.data?.seq === 'number' ? node.data.seq : undefined
   const markerRef = useRef<HTMLDivElement | null>(null)
 
   useLayoutEffect(() => {
@@ -87,9 +88,15 @@ export function UserMessageView(
     const row = element.closest('[data-chat-flow-key]')
     if (!(row instanceof HTMLElement)) return
     const flowKey = row.getAttribute('data-chat-flow-key')
-    if (flowKey) registerMessage(flowKey, { raw, ...(time !== undefined ? { time } : {}) })
+    if (flowKey) {
+      registerMessage(flowKey, {
+        raw,
+        ...(time !== undefined ? { time } : {}),
+        ...(seq !== undefined ? { seq } : {}),
+      })
+    }
     row.classList.add('dsqe_row')
-  }, [raw, time])
+  }, [raw, time, seq])
 
   const scanned = scanQuotes(raw)
   const text = scanned.rest.trim()

@@ -33,6 +33,8 @@ export interface ClientContext {
   effect(fn: () => unknown, label: string): unknown
   slots: SlotsService
   locale: LocaleService
+  /** Resolve another host service by name (e.g. `sessions`, `uiConversation`). */
+  get?(name: string): unknown
 }
 
 /** Props of the host `conversation.chat.node` views this plugin replaces. */
@@ -41,6 +43,8 @@ export interface UserMessageProps {
     data?: {
       content?: unknown
       time?: number
+      /** Log seq of the message (used by the ↶ withdraw action). */
+      seq?: number
     } & Record<string, unknown>
   } & Record<string, unknown>
   hostNodeOf?: () => unknown
