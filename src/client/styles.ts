@@ -368,6 +368,41 @@ body[data-ds-dark-theme] {
 .dsqe-jsonNum { color: var(--dsqe-json-num); }
 .dsqe-jsonLit { color: var(--dsqe-json-lit); }
 
+/* ---------- 输入框手动调高（composer-resize.ts） ----------
+   卡片顶边中央一枚 grip，上拖变高（输入框贴窗口底边）、双击复原；
+   高度写进编辑器滚动区 inline style，持久化在 localStorage。 */
+.dsqe_rzCard { position: relative; }
+.dsqe-rzHandle {
+  position: absolute;
+  top: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 76px;
+  height: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  touch-action: none;
+  z-index: 6;
+}
+.dsqe-rzHandle::after {
+  content: '';
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--dsqe-chip-label);
+  opacity: 0.30;
+  transition: opacity 0.12s ease;
+}
+.dsqe-rzHandle:hover::after,
+.dsqe-rzHandle[data-dragging='true']::after { opacity: 0.75; }
+body[data-dsqe-resizing='true'] {
+  cursor: ns-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 /* ---------- 对话记录里带引用的用户气泡 ---------- */
 .dsqe-userRow {
   display: flex;

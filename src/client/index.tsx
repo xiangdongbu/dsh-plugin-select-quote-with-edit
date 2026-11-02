@@ -14,6 +14,7 @@ import { installSidebarDetail } from './sidebar-tab.tsx'
 import { UserMessageView } from './transcript.tsx'
 import { pickDelegate } from './host-node.ts'
 import { runtime } from './runtime.ts'
+import { watchComposerResize } from './composer-resize.ts'
 import { watchQuotePaste } from './paste.ts'
 
 /**
@@ -189,4 +190,7 @@ export function apply(ctx: ClientContext): void {
 
   // Hover chrome: action row + inline editor (plain DOM).
   ctx.effect(() => watchMessageChrome(), 'select-quote-with-edit: hover chrome')
+
+  // Composer grip: drag the input taller, double-click resets (plain DOM).
+  ctx.effect(() => watchComposerResize(), 'select-quote-with-edit: composer resize')
 }

@@ -91,6 +91,9 @@ function makeStubs() {
     querySelector() {
       return null
     },
+    querySelectorAll() {
+      return []
+    },
   }
 
   class FakeMutationObserver {
@@ -583,6 +586,15 @@ check(
     clientCode.includes('displayJson') &&
     clientCode.includes('dsqe-sideJson') &&
     clientCode.includes('dsqe-jsonLineNo'),
+)
+check(
+  'composer grip resizes the editor (drag + clamp + persistence + dblclick reset)',
+  clientCode.includes('watchComposerResize') &&
+    clientCode.includes('dsqe-rzHandle') &&
+    clientCode.includes('COMPOSER_MIN_HEIGHT') &&
+    clientCode.includes('COMPOSER_MAX_HEIGHT') &&
+    clientCode.includes('composerHeight') &&
+    clientCode.includes('dblclick'),
 )
 
 // ---------------------------------------------------------------- withdraw engine

@@ -21,6 +21,7 @@ src/client/composer-panel.tsx    # 输入框 chip 行 + 标记 + 发送折叠 + 
 src/client/chip.tsx              # React 引用 chip（输入框/气泡内，悬停全文预览，长文本胶囊图标）
 src/client/detail.tsx            # 右侧详情（消息胶囊点击打开，模块级 store + 本地抽屉兜底）
 src/client/sidebar-tab.tsx       # 原生右侧边栏详情标签页（sidebarRightTabs + openTabIn，JSON 高亮）
+src/client/composer-resize.ts    # 输入框顶边 grip 拖拽调高（钳制 + localStorage 持久化，双击复原）
 src/client/host-node.ts          # 委托链解析 + Delegate 类型
 src/client/registry.ts           # flowKey → {raw, time, seq}（node 视图写入，chrome 读取）
 src/client/composer-bridge.tsx   # conversation.input.overlay 桥（inputActions/markFolded/sessionId/withdraw）
@@ -81,6 +82,9 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 `openDetail` **优先走宿主原生右侧边栏**（与 `dsh-file-review` 同款接入，**`sidebarRight` / `sidebarRightTabs` 必须声明在插件 `inject` 数组里宿主才会注入**——0.4.0 漏了声明导致永远降级本地抽屉；bundle 内仍 duck typing 松解析，不 import 宿主包）：`sidebarRightTabs.register({ id, kind, title })` 注册标签页 → `slots.inject('sidebar.right.pane.tab')` / `('sidebar.right.pane.tab.title')` 注册正文与标题（`key` = 标签 id）→ 打开用 `sidebarRight.openTabIn(sessionId, tabId, { params: { text, long? } })`，正文组件从 `useTabInfo().tab.navigation.params` 读参数（宿主传入的 hook prop）。`index.tsx` 在 `ctx.effect` 里安装（服务可能晚于 `apply()` 就绪，100ms × 10 次重试），成功后把 opener 挂到 `runtime.detailOpener`；宿主 Minimal profile / mock 无此服务时**降级为本地抽屉**（`shell.overlay` order 110，body portal，× / Esc 关闭）。正文组件 `DetailBody`：**JSON 自动识别**——`looksLikeJson`（`{`/`[` 开头 + `JSON.parse` 成功且为 object，2MB 上限防卡死）→ 紧凑 JSON 自动 `JSON.stringify(_, null, 2)` 格式化 → 按行分 token（`JSON_TOKEN_RE`：键 / 字符串 / 数字 / 字面量 / 结构符）渲染**行号 + 语法配色**代码视图（`--dsqe-json-*` 明暗主题各配一组）；非 JSON 走 pre-wrap 文本。标题栏带「复制全文」按钮（`copyText`，成功切 ✓ 1.5s）。悬浮预览（React tip 与 chrome 的 DOM 单例 tip）都有 `max-height: 50vh + overflow-y: auto`，长文本在预览面板内滚动。旧消息条目无 `long` 字段按普通引用渲染，协议向后兼容。
 
 **7. 回显剥离 / storage 对账 / U+200B**：与两个前身插件一致，剥离幂等（合并后只有一份观察器）。
+
+**11. 输入框手动调高（0.5.0+，composer-resize.ts）**
+纯 DOM 装饰（与 hover chrome 同生命周期，`ctx.effect(() => watchComposerResize())`）：MutationObserver 盯 `[data-composer-card]`，出现的卡片加 `dsqe_rzCard`（position:relative）并在顶边中央挂一枚 grip（`dsqe-rzHandle`，absolute top:-5px，76×12 命中区，细横条 `::after` 默认 0.3 透明度、悬停/拖拽 0.75）。`pointerdown` 起拖（Pointer Capture，body 标 `data-dsqe-resizing` 锁选择 + ns-resize 光标）：目标元素 = 卡内 `[data-lexical-editor="true"]` 自身或其最近 `overflow-y: auto/scroll` 祖先（`composerScrollAreaOf`），高度 = 起始高 + (startY − clientY)（输入框贴底，**上拖变高**），写入 inline `height`/`max-height` 并强制 `overflow-y: auto`，钳制在 `COMPOSER_MIN_HEIGHT`(44) ～ `min(COMPOSER_MAX_HEIGHT`(640), 60vh)`；`pointerup` 存 localStorage（`dsh.select-quote-with-edit.composerHeight`），卡片再现时（含刷新后）自动套用；`dblclick` 清 inline 高度 + 清存储复原。与 chip 行的 `--dsqe-pad` 预留互不影响（ResizeObserver 自适应）。
 
 ## 依赖的产品内部约定（升级 dsh 后复核）
 
