@@ -37,6 +37,14 @@
     white-space: pre-wrap;
     user-select: text;
   }
+  .ds-actions { display: flex; align-items: center; gap: 8px; height: 28px; }
+  .ds-time { padding-right: 12px; font-size: 13px; color: #a3a7ad; white-space: nowrap; }
+  .ds-action {
+    appearance: none; border: 0; padding: 6px; width: 28px; height: 28px;
+    border-radius: 6px; background: transparent; color: #a3a7ad; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .ds-action:hover { background: rgba(127, 127, 127, 0.16); color: #ececee; }
   .ds-bubbleRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .ds-chip {
     display: inline-flex;

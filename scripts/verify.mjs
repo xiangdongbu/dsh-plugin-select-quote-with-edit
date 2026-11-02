@@ -460,6 +460,14 @@ check(
     clientCode.includes('dsqe-tipWrap'),
 )
 check('hover chrome watches pointer + time format dicts', clientCode.includes('time.sameYear') && clientCode.includes('pointerover'))
+check(
+  'edit pencil injects into the host actions row (data-clock hook)',
+  clientCode.includes('[data-clock="start"]') && clientCode.includes('dsqe_hostEdit'),
+)
+check(
+  'editor card is content-sized (fit-content)',
+  clientCode.includes('fit-content'),
+)
 
 // ---------------------------------------------------------------- host half
 {

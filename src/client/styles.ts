@@ -281,11 +281,36 @@ body[data-ds-dark-theme] {
 .dsqe_iconBtn:hover { background: rgba(127, 127, 127, 0.16); color: var(--dsqe-label); }
 .dsqe_iconBtn svg { width: 14px; height: 14px; }
 
+/* The pencil injected into the host's own actions row follows the host
+   action-button metrics (28px box, 15px glyph, product alias tokens) so it
+   reads as a native control next to the built-in copy button. */
+.dsqe_hostEdit {
+  width: calc(28px + var(--dsh-content-font-delta, 0px));
+  height: calc(28px + var(--dsh-content-font-delta, 0px));
+  padding: 6px;
+  border-radius: var(--dsw-radius-sm, 6px);
+  color: var(--dsw-alias-label-tertiary, var(--dsqe-label-2));
+}
+.dsqe_hostEdit:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.16));
+  color: var(--dsw-alias-label-secondary, var(--dsqe-label));
+}
+.dsqe_hostEdit svg {
+  width: calc(15px + var(--dsh-content-font-delta, 0px));
+  height: calc(15px + var(--dsh-content-font-delta, 0px));
+}
+
 /* ---------- 内联编辑器 ---------- */
 .dsqe_editor {
   position: relative;
   z-index: 6;
+  /* Size to the content and sit on the bubble's side of the row, instead of
+     stretching across the whole conversation column. */
   margin-top: 8px;
+  margin-left: auto;
+  width: fit-content;
+  min-width: min(320px, 100%);
+  max-width: 76%;
   border-radius: 16px;
   background: var(--dsqe-card);
   box-shadow: var(--dsqe-elev);

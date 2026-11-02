@@ -146,13 +146,33 @@ function componentName(component: unknown): string | undefined {
   return candidate?.type?.name ?? candidate?.render?.name ?? candidate?.name
 }
 
-// Host's own user bubble (named exactly like the real one).
+// Host's own user bubble (named exactly like the real one), with the real
+// host's MessageIconActions row below it (clock + copy, data-clock='start') —
+// the row the plugin must inject its pencil into instead of floating a second
+// action row.
+function mockClock(time: number): string {
+  const date = new Date(time)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
 function UserMessageNodeView(props: Record<string, unknown>): React.ReactNode {
-  const node = props.node as { data?: { content?: unknown } } | undefined
+  const node = props.node as
+    | { data?: { content?: unknown; time?: number } }
+    | undefined
   const text = textOfContent(node?.data?.content)
+  const time = typeof node?.data?.time === 'number' ? node.data.time : undefined
   return (
     <div className="ds-userRow" data-host-user="true">
       <div className="ds-bubble">{text}</div>
+      <div className="ds-actions" data-clock="start">
+        {time !== undefined ? <span className="ds-time">{mockClock(time)}</span> : null}
+        <button type="button" className="ds-action" title="复制" aria-label="复制">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+            <rect x="5.2" y="5.2" width="8.2" height="8.2" rx="2" stroke="currentColor" strokeWidth="1.3" />
+            <path d="M10.8 5.2V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v4.8a2 2 0 0 0 2 2h1.2" stroke="currentColor" strokeWidth="1.3" />
+          </svg>
+        </button>
+      </div>
     </div>
   )
 }
@@ -596,6 +616,8 @@ function textNodeMap(host: Element): { node: Text; start: number; end: number }[
       pendingChipText: document.querySelector('.dsqe-chipRow .dsqe-chipText')?.textContent?.slice(0, 10) ?? null,
       draft: JSON.stringify(draftStore.draft),
       actionShown: document.querySelector('.dsqe_actions')?.getAttribute('data-shown') ?? null,
+      hostEditInRow: document.querySelector('[data-clock="start"] .dsqe_hostEdit') !== null,
+      pluginRowPad: document.querySelector('.dsqe_rowPad') !== null,
       timeText: document.querySelector('.dsqe_time')?.textContent ?? null,
       actionGap: (() => {
         const row = document.querySelector('.dsqe_actions')?.parentElement as HTMLElement | null

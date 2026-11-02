@@ -2,7 +2,7 @@
   "name": "dsh-plugin-select-quote-with-edit",
   "version": "0.1.1",
   "private": false,
-  "description": "DeepSeek Harness 客户端插件：划词引用（复制 / 添加到对话，chip 悬停预览）+ 消息悬停编辑（时间/编辑/复制，内联改后作为新消息发出）。",
+  "description": "DeepSeek Harness 客户端插件：划词引用（复制 / 添加到对话，chip 悬停预览）+ 消息悬停编辑（编辑按钮并入悬停操作行，内联改后作为新消息发出）。",
   "keywords": [
     "deepseek",
     "deepseek-harness",

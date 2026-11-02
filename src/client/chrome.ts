@@ -2,7 +2,11 @@
  * Hover chrome + inline editor, all plain DOM (no React).
  *
  * Hovering a user message row (tagged by the node view's `data-dsqe-user`
- * marker) shows an action row under the bubble: last-sent time, edit, copy.
+ * marker) surfaces the edit affordance. Plain messages delegate to the host's
+ * own actions row (`MessageIconActions`, clock + copy): the plugin injects its
+ * pencil button into that single row instead of floating a second one. Quote
+ * bubbles are plugin-drawn and come with no host row, so they keep the
+ * plugin's own action row (time / edit / copy) below the bubble.
  * 「编辑」 replaces the bubble with an inline editor (quote chips + editable
  * text + hint + 取消/发送). 「发送」 writes the re-composed wire text into the
  * resident composer and triggers its own send gesture, so the edit lands as a
@@ -19,11 +23,16 @@ import { SVG_PENCIL, SVG_COPY, SVG_CHECK, SVG_INFO, SVG_QUOTE, SVG_X } from './s
 
 const FLOW_ITEM = '[data-chat-flow-key]'
 const COMPOSER_CARD = '[data-composer-card]'
+// The host's MessageIconActions root carries `data-clock` ('start' on user /
+// steering rows, 'end' on assistant tails) — a stable hook that survives the
+// CSS-module class hashing.
+const HOST_ACTIONS = '[data-clock="start"]'
 
 let actionsEl: HTMLElement | null = null
 let timeEl: HTMLElement | null = null
 let editBtn: HTMLButtonElement | null = null
 let copyBtn: HTMLButtonElement | null = null
+let hostEditBtn: HTMLButtonElement | null = null
 let actionsRow: HTMLElement | null = null
 let hideTimer: number | null = null
 let copiedTimer: number | null = null
@@ -120,6 +129,41 @@ function buildActions(): void {
   actionsEl.append(timeEl, editBtn, copyBtn)
 }
 
+/**
+ * The pencil for the host's own actions row — separate singleton from the
+ * plugin row's edit button, so both can coexist (an always-visible tail row
+ * plus a hovered quote row elsewhere). The row is resolved at click time via
+ * closest(), so the same element works wherever it is injected.
+ */
+function buildHostEditButton(): void {
+  hostEditBtn = document.createElement('button')
+  hostEditBtn.type = 'button'
+  hostEditBtn.className = 'dsqe_iconBtn dsqe_hostEdit'
+  hostEditBtn.title = t('row.edit')
+  hostEditBtn.setAttribute('aria-label', t('row.edit'))
+  hostEditBtn.innerHTML = SVG_PENCIL
+  hostEditBtn.addEventListener('click', () => {
+    const row = hostEditBtn?.closest(FLOW_ITEM)
+    if (row instanceof HTMLElement) startEdit(row)
+  })
+}
+
+/**
+ * Inject the pencil into the row's host actions row, if the host rendered
+ * one. Returns false for quote rows (plugin-drawn bubble, no host row) so the
+ * caller falls back to the plugin row. React may rebuild the row and drop the
+ * foreign button at any time; callers re-invoke on hover moves and the
+ * parentElement check re-appends cheaply.
+ */
+function ensureEditInHostRow(row: HTMLElement): boolean {
+  if (editingRow !== null) return false
+  const host = row.querySelector(HOST_ACTIONS)
+  if (!(host instanceof HTMLElement)) return false
+  if (hostEditBtn === null) buildHostEditButton()
+  if (hostEditBtn!.parentElement !== host) host.appendChild(hostEditBtn!)
+  return true
+}
+
 async function copyMessage(): Promise<void> {
   if (actionsRow === null || copyBtn === null) return
   const flowKey = actionsRow.getAttribute('data-chat-flow-key') ?? ''
@@ -162,6 +206,12 @@ function showActions(row: HTMLElement): void {
   }
   if (actionsRow === row) return
   hideActionsImmediate()
+  // The host already provides the single actions row for delegated (plain)
+  // messages: no plugin row, no hover padding — just add the pencil to it.
+  row.classList.remove('dsqe_rowPad')
+  if (ensureEditInHostRow(row)) return
+  // Quote bubbles are plugin-drawn with no host row: keep the plugin's own
+  // action row (time / edit / copy) under the bubble.
   if (actionsEl === null) buildActions()
   timeEl!.textContent = formatTime(entry.time)
   timeEl!.style.display = timeEl!.textContent === '' ? 'none' : ''
@@ -478,6 +528,10 @@ export function watchMessageChrome(): () => void {
     if (!(event instanceof PointerEvent)) return
     lastPointer.x = event.clientX
     lastPointer.y = event.clientY
+    // Cheap re-injection while the pointer travels a marked row: React may
+    // have rebuilt the host actions row and dropped the pencil mid-hover.
+    const row = rowOf(event.target)
+    if (row !== null && row !== actionsRow) ensureEditInHostRow(row)
   }
   const onBlur = (): void => {
     if (editingRow === null) hideActionsImmediate()
@@ -494,6 +548,8 @@ export function watchMessageChrome(): () => void {
     window.removeEventListener('blur', onBlur)
     exitEdit()
     hideActionsImmediate()
+    hostEditBtn?.remove()
+    hostEditBtn = null
     hideTipNow()
     if (hideTimer !== null) window.clearTimeout(hideTimer)
     if (copiedTimer !== null) window.clearTimeout(copiedTimer)
