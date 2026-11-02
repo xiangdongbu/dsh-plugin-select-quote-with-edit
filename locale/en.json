@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Select Quote + Long-Text Capsule + Edit + Undo",
-    "description": "Select text to copy it or attach it to the composer as a quote chip (hover for the full text); pasting long text folds it into a capsule chip, and clicking a capsule in a sent message opens the detail drawer on the right; hover your own messages for time / copy / edit / undo — edits are sent as a new message, while undo rewinds the message, restores the files its turn changed, and refills the original text and quote chips into the composer."
+    "description": "Select text to copy it or attach it to the composer as a quote chip (hover for the full text); pasting long text folds it into a capsule chip, and clicking a capsule in a sent message opens the detail tab in the native right sidebar (JSON auto-formatted and highlighted; degrades to a local drawer without the sidebar service); hover your own messages for time / copy / edit / undo — edits are sent as a new message, while undo rewinds the message, restores the files its turn changed, and refills the original text and quote chips into the composer."
   }
 }

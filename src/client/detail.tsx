@@ -13,6 +13,7 @@ import { createPortal } from 'react-dom'
 import { t } from './i18n.ts'
 import { ClipIcon, QuoteIcon, XIcon } from './icons.tsx'
 import { cx, ensureStyles } from './styles.ts'
+import { runtime } from './runtime.ts'
 
 export interface DetailTarget {
   readonly text: string
@@ -26,8 +27,13 @@ function notify(): void {
   for (const listener of listeners) listener()
 }
 
-/** Open the drawer with the given capsule body (idempotent for equal text). */
+/**
+ * Open the capsule detail. The host's native right sidebar wins (the tab
+ * registered by sidebar-tab.tsx, opened for the current session); the fixed
+ * local drawer below is the fallback for hosts without the sidebar service.
+ */
 export function openDetail(text: string, long = false): void {
+  if (runtime.detailOpener?.(text, long) === true) return
   const next: DetailTarget = { text, long }
   if (current?.text === next.text && current?.long === next.long) return
   current = next

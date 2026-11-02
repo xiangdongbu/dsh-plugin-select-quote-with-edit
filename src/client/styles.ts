@@ -34,6 +34,10 @@ body {
   --dsqe-send-label: #ffffff;
   --dsqe-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.10), 0 3px 8px rgba(0, 0, 0, 0.05), 0 0 20px rgba(0, 0, 0, 0.05);
   --dsqe-elev: 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 3px 10px rgba(0, 0, 0, 0.06);
+  --dsqe-json-key: #0550ae;
+  --dsqe-json-str: #116329;
+  --dsqe-json-num: #953800;
+  --dsqe-json-lit: #8250df;
 }
 body[data-ds-dark-theme] {
   --dsqe-label: #f0f0f2;
@@ -49,6 +53,10 @@ body[data-ds-dark-theme] {
   --dsqe-send-label: #1b1c1f;
   --dsqe-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 8px 28px rgba(0, 0, 0, 0.42);
   --dsqe-elev: 0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 6px 22px rgba(0, 0, 0, 0.35);
+  --dsqe-json-key: #79c0ff;
+  --dsqe-json-str: #7ee787;
+  --dsqe-json-num: #ffa657;
+  --dsqe-json-lit: #d2a8ff;
 }
 
 /* ---------- 消息行标记（悬停 chrome / 编辑器的定位上下文） ---------- */
@@ -301,6 +309,64 @@ body[data-ds-dark-theme] {
   color: var(--dsqe-quote-text);
   user-select: text;
 }
+
+/* ---------- 原生侧边栏里的胶囊详情标签页（sidebar-tab.tsx） ---------- */
+.dsqe-sideWrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.dsqe-sideEmpty {
+  padding: 32px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--dsqe-label-2);
+}
+.dsqe-sideBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 21px;
+  color: var(--dsqe-quote-text);
+  user-select: text;
+}
+/* JSON 视图：行号 + 语法配色（紧凑 JSON 自动格式化），参考原生审查面板 */
+.dsqe-sideJson {
+  padding: 12px 0 24px;
+  white-space: pre;
+  overflow-wrap: normal;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 20px;
+}
+.dsqe-jsonLine { display: flex; }
+.dsqe-jsonLine:hover { background: var(--dsqe-chip-bg); }
+.dsqe-jsonLineNo {
+  flex: none;
+  width: 46px;
+  padding-right: 12px;
+  text-align: right;
+  color: var(--dsqe-label-2);
+  opacity: 0.65;
+  user-select: none;
+}
+.dsqe-jsonCode {
+  flex: 1;
+  min-width: 0;
+  padding-right: 16px;
+}
+.dsqe-jsonKey { color: var(--dsqe-json-key); }
+.dsqe-jsonStr { color: var(--dsqe-json-str); }
+.dsqe-jsonNum { color: var(--dsqe-json-num); }
+.dsqe-jsonLit { color: var(--dsqe-json-lit); }
 
 /* ---------- 对话记录里带引用的用户气泡 ---------- */
 .dsqe-userRow {

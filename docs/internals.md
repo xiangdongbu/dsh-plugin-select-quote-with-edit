@@ -19,7 +19,8 @@ src/client/svg.ts                # 纯 DOM chrome 用的 SVG 字符串
 src/client/selection-toolbar.tsx # 划词工具条（shell.overlay）
 src/client/composer-panel.tsx    # 输入框 chip 行 + 标记 + 发送折叠 + 撤回还原
 src/client/chip.tsx              # React 引用 chip（输入框/气泡内，悬停全文预览，长文本胶囊图标）
-src/client/detail.tsx            # 右侧详情抽屉（消息胶囊点击打开，模块级 store）
+src/client/detail.tsx            # 右侧详情（消息胶囊点击打开，模块级 store + 本地抽屉兜底）
+src/client/sidebar-tab.tsx       # 原生右侧边栏详情标签页（sidebarRightTabs + openTabIn，JSON 高亮）
 src/client/host-node.ts          # 委托链解析 + Delegate 类型
 src/client/registry.ts           # flowKey → {raw, time, seq}（node 视图写入，chrome 读取）
 src/client/composer-bridge.tsx   # conversation.input.overlay 桥（inputActions/markFolded/sessionId/withdraw）
@@ -36,7 +37,8 @@ test/mock/                       # mock dsh 客户端（含 -10 模拟消息插�
 
 | 位置 | 类型 | 说明 |
 |---|---|---|
-| `shell.overlay` | list slot | 划词工具条（order 100）+ 右侧详情抽屉（order 110），root 级常驻 |
+| `shell.overlay` | list slot | 划词工具条（order 100）+ 本地详情抽屉兜底（order 110），root 级常驻 |
+| `sidebar.right.pane.tab` (+ `.title`) | keyed slot | 原生侧边栏详情标签页正文（`key` = 标签 id，配合 `sidebarRightTabs.register` + `sidebarRight.openTabIn`） |
 | `conversation.input.overlay` | list slot | 桥（order 1，发布 inputActions/markFolded）+ chip 行（order 20） |
 | `conversation.chat.node` | keyed slot | `user` / `steering`（`priority: -20`、`locale: 'chat'`）：标记 + 引用气泡 + 委托 |
 | `ctx.locale` | 语言服务 | `register(ns, {zh, en})` + `bind` |
@@ -73,7 +75,10 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 消息操作行的「复制」写双通道剪贴板（`copyRich`）：`text/plain` = 展示正文；`text/html` = 正文 + 不可见注释 `<!--dsh-quote-data:[{"text":…}]-->`（`<`→`\u003c`、`--`→`\u002d` 转义，防提前闭合）。粘贴到其他应用只看到正文；粘贴进 composer 时 document 捕获阶段的 `paste` 监听器解析标记 → `preventDefault` → 逐条 `addQuote` → `execCommand('insertText')` 在光标处插入正文（失败则 `runtime.draft` 兜底追加）。无标记 / JSON 坏 / 空数组一律不拦截（原生粘贴）。clipboard 写入优先 `navigator.clipboard.write` + `ClipboardItem`（Blob 双通道），降级为选中隐藏富节点 `execCommand('copy')`（HTML 通道保留）。
 
 **9. 超长文本胶囊链（0.3.0+）**
-粘贴进 composer 的纯文本 ≥ `LONG_TEXT_THRESHOLD`（500 字符）且无引用标记时：`preventDefault` + **`stopImmediatePropagation`** → `addQuote(text, { long: true })` 折叠为**长文本胶囊**。事件截断是必须的：宿主 Lexical 编辑器的 paste 处理（`onPasteForRichText`）**不检查 `defaultPrevented`**，事件一旦冒泡到编辑器根元素就会派发 `PASTE_COMMAND` 把剪贴板全文再插一遍（0.3.0 只 `preventDefault` 时胶囊旁边仍出现全文，即此因）；引用数据粘贴分支同理截断，让 `execCommand('insertText')` 成为唯一插入路径。（`chip.tsx` 按 `quote.long` 渲染三行文字线文档图标 `ClipIcon`；`protocol.chipLabel` 把 chip 的 DOM 文本截到 200 字符防大粘贴撑爆布局，全文只存在于 store / 协议块 / 预览面板）。发送时 `composeMessage` 在协议块条目上序列化 `long: true`；`scanQuotes` / `readComposedDraft` / store 持久化都保留该标记——**撤回还原后胶囊原样回到输入框**。气泡内的胶囊由 transcript 传 `onOpen`，点击经 `detail.tsx` 的模块级 store（`openDetail(text, long)`）打开**右侧详情抽屉**（`shell.overlay` order 110，body portal，标题「超长文本」/「引用详情」，全文滚动展示，× / Esc 关闭）。悬浮预览（React tip 与 chrome 的 DOM 单例 tip）都加了 `max-height: 50vh + overflow-y: auto`，长文本在预览面板内滚动。旧消息条目无 `long` 字段按普通引用渲染，协议向后兼容。
+粘贴进 composer 的纯文本 ≥ `LONG_TEXT_THRESHOLD`（500 字符）且无引用标记时：`preventDefault` + **`stopImmediatePropagation`** → `addQuote(text, { long: true })` 折叠为**长文本胶囊**。事件截断是必须的：宿主 Lexical 编辑器的 paste 处理（`onPasteForRichText`）**不检查 `defaultPrevented`**，事件一旦冒泡到编辑器根元素就会派发 `PASTE_COMMAND` 把剪贴板全文再插一遍（0.3.0 只 `preventDefault` 时胶囊旁边仍出现全文，即此因）；引用数据粘贴分支同理截断，让 `execCommand('insertText')` 成为唯一插入路径。（`chip.tsx` 按 `quote.long` 渲染三行文字线文档图标 `ClipIcon`；`protocol.chipLabel` 把 chip 的 DOM 文本截到 200 字符防大粘贴撑爆布局，全文只存在于 store / 协议块 / 预览面板）。发送时 `composeMessage` 在协议块条目上序列化 `long: true`；`scanQuotes` / `readComposedDraft` / store 持久化都保留该标记——**撤回还原后胶囊原样回到输入框**。气泡内的胶囊由 transcript 传 `onOpen`，点击经 `detail.tsx` 的模块级 store（`openDetail(text, long)`）打开右侧详情。
+
+**10. 原生侧边栏详情（0.4.0+，sidebar-tab.tsx）**
+`openDetail` **优先走宿主原生右侧边栏**（与 `dsh-file-review` 同款接入，duck typing 松解析，bundle 不依赖宿主包）：`sidebarRightTabs.register({ id, kind, title })` 注册标签页 → `slots.inject('sidebar.right.pane.tab')` / `('sidebar.right.pane.tab.title')` 注册正文与标题（`key` = 标签 id）→ 打开用 `sidebarRight.openTabIn(sessionId, tabId, { params: { text, long? } })`，正文组件从 `useTabInfo().tab.navigation.params` 读参数（宿主传入的 hook prop）。`index.tsx` 在 `ctx.effect` 里安装（服务可能晚于 `apply()` 就绪，100ms × 10 次重试），成功后把 opener 挂到 `runtime.detailOpener`；宿主 Minimal profile / mock 无此服务时**降级为本地抽屉**（`shell.overlay` order 110，body portal，× / Esc 关闭）。正文组件 `DetailBody`：**JSON 自动识别**——`looksLikeJson`（`{`/`[` 开头 + `JSON.parse` 成功且为 object，2MB 上限防卡死）→ 紧凑 JSON 自动 `JSON.stringify(_, null, 2)` 格式化 → 按行分 token（`JSON_TOKEN_RE`：键 / 字符串 / 数字 / 字面量 / 结构符）渲染**行号 + 语法配色**代码视图（`--dsqe-json-*` 明暗主题各配一组）；非 JSON 走 pre-wrap 文本。标题栏带「复制全文」按钮（`copyText`，成功切 ✓ 1.5s）。悬浮预览（React tip 与 chrome 的 DOM 单例 tip）都有 `max-height: 50vh + overflow-y: auto`，长文本在预览面板内滚动。旧消息条目无 `long` 字段按普通引用渲染，协议向后兼容。
 
 **7. 回显剥离 / storage 对账 / U+200B**：与两个前身插件一致，剥离幂等（合并后只有一份观察器）。
 

@@ -569,6 +569,20 @@ check(
   'message capsules open the right-hand detail drawer',
   clientCode.includes('openDetail') && clientCode.includes('select-quote-with-edit-detail'),
 )
+check(
+  'native sidebar tab is wired like dsh-file-review (register + openTabIn + tab slot)',
+  clientCode.includes('sidebarRightTabs') &&
+    clientCode.includes('openTabIn') &&
+    clientCode.includes('sidebar.right.pane.tab') &&
+    clientCode.includes('detailOpener'),
+)
+check(
+  'JSON capsule bodies get the dedicated JSON view (detect + pretty print + line numbers)',
+  clientCode.includes('looksLikeJson') &&
+    clientCode.includes('displayJson') &&
+    clientCode.includes('dsqe-sideJson') &&
+    clientCode.includes('dsqe-jsonLineNo'),
+)
 
 // ---------------------------------------------------------------- withdraw engine
 {

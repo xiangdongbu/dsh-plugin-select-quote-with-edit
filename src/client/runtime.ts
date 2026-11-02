@@ -31,10 +31,17 @@ export const runtime: {
   sessionId: string | null
   /** Withdraw the message at `(flowKey, anchorKey)`; see withdraw.ts. */
   withdraw: ((flowKey: string, anchorKey: string) => Promise<WithdrawOutcome>) | null
+  /**
+   * Open the capsule detail in the host's native right sidebar
+   * (sidebar-tab.tsx). Returns false when the sidebar service is missing or
+   * no session is bound — the caller then falls back to the local drawer.
+   */
+  detailOpener: ((text: string, long: boolean) => boolean) | null
 } = {
   inputActions: null,
   markFolded: null,
   draft: null,
   sessionId: null,
   withdraw: null,
+  detailOpener: null,
 }

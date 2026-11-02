@@ -10,8 +10,10 @@ import { SelectionToolbar } from './selection-toolbar.tsx'
 import { ComposerPanel } from './composer-panel.tsx'
 import { ComposerBridge } from './composer-bridge.tsx'
 import { QuoteDetailPanel } from './detail.tsx'
+import { installSidebarDetail } from './sidebar-tab.tsx'
 import { UserMessageView } from './transcript.tsx'
 import { pickDelegate } from './host-node.ts'
+import { runtime } from './runtime.ts'
 import { watchQuotePaste } from './paste.ts'
 
 /**
@@ -64,7 +66,29 @@ export function apply(ctx: ClientContext): void {
     )
   })
 
-  // Root: right-hand detail drawer for capsule clicks in sent messages.
+  // Root: right-hand detail for capsule clicks in sent messages. The native
+  // sidebar tab is preferred (sidebar-tab.tsx); the sidebar services may lag
+  // apply() in some profiles, so retry briefly before keeping the local
+  // drawer (QuoteDetailPanel) as the fallback.
+  ctx.effect(() => {
+    let tries = 10
+    const attempt = (): void => {
+      const opener = installSidebarDetail(ctx)
+      if (opener !== null) {
+        runtime.detailOpener = opener
+        return
+      }
+      if (tries > 0) {
+        tries -= 1
+        window.setTimeout(attempt, 100)
+      }
+    }
+    attempt()
+    return () => {
+      tries = 0
+      if (runtime.detailOpener !== null) runtime.detailOpener = null
+    }
+  }, 'select-quote-with-edit: native sidebar detail tab')
   ctx.slots.inject('shell.overlay', () => {
     ctx.slots.register(
       {
