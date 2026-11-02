@@ -548,6 +548,27 @@ check(
     String(cmd),
   )
   check('withdraw: reports ok + refilled and restores the raw wire text', ok.ok === true && ok.refilled === true && draft === wire)
+  {
+    let release
+    const pending = new Promise((resolve) => {
+      release = resolve
+    })
+    let earlyDraft = null
+    const run = withdrawMessage({
+      ...deps,
+      getSessions: () => ({ binding: () => ({ session: { command: () => pending } }) }),
+      setDraft: (text) => {
+        earlyDraft = text
+      },
+    })
+    check(
+      'withdraw: fills the composer immediately, before the (slow) command resolves',
+      earlyDraft === wire,
+      JSON.stringify(earlyDraft),
+    )
+    release({ ok: true, value: { matched: true } })
+    await run
+  }
   check(
     'withdraw: refilled quote block unfolds back into pending quotes',
     (() => {

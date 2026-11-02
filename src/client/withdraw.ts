@@ -109,10 +109,6 @@ export interface WithdrawDeps {
   /** fallback seq recorded by the node view, when the snapshot is unavailable. */
   readonly getSeq?: (flowKey: string) => number | undefined
   readonly setDraft: (text: string) => void
-  /** Resolves after `ms`; injectable for tests. */
-  readonly sleep?: (ms: number) => Promise<void>
-  /** How long to wait for the target to leave the surface before giving up. */
-  readonly waitMs?: number
 }
 
 export interface WithdrawOutcome {
@@ -123,46 +119,19 @@ export interface WithdrawOutcome {
   readonly reason?: string
 }
 
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms)
-  })
-}
-
-/** Wait (bounded) until `seq` no longer appears in the chat snapshot. */
-async function waitForSeqGone(
-  getUiConversation: () => UiConversationLike | undefined,
-  sessionId: string,
-  seq: number,
-  sleep: (ms: number) => Promise<void>,
-  waitMs: number,
-): Promise<boolean> {
-  const deadline = Date.now() + waitMs
-  for (;;) {
-    const snapshot = chatSnapshotOf(getUiConversation(), sessionId)
-    let stillThere = false
-    const nodes = snapshot?.nodes
-    if (nodes !== undefined && typeof nodes.values === 'function') {
-      for (const node of nodes.values()) {
-        // A row the visibility layer hid counts as withdrawn.
-        if (node?.data?.seq === seq && node.visibility !== 'hidden') {
-          stillThere = true
-          break
-        }
-      }
-    }
-    if (!stillThere && snapshot !== undefined) return true
-    if (Date.now() >= deadline) return false
-    await sleep(50)
-  }
-}
-
 /**
- * Withdraw the message at `flowKey`: rewind the conversation + files, then
+ * Withdraw the message at `flowKey`: rewind the conversation + files, and
  * refill the composer with the message's raw wire text.
  *
- * Returns `ok:false` (without touching the draft) when the seq cannot be
- * resolved or the rewind command is unavailable/rejected.
+ * The refill is **not** gated on the rewind/restore finishing. The host's
+ * rewind handler awaits workspace file restore (which can take a while), so
+ * awaiting the command before writing the draft made the input box appear to
+ * lag. Here the command is dispatched, the composer is filled immediately, and
+ * only then does the caller continue to await the command result (for the
+ * failure hint).
+ *
+ * Returns `ok:false` when the seq cannot be resolved or the rewind command is
+ * unavailable/rejected; the draft is still filled when a raw text is known.
  */
 export async function withdrawMessage(deps: WithdrawDeps): Promise<WithdrawOutcome> {
   const snapshot = chatSnapshotOf(deps.getUiConversation(), deps.sessionId)
@@ -176,34 +145,27 @@ export async function withdrawMessage(deps: WithdrawDeps): Promise<WithdrawOutco
     return { ok: false, refilled: false, reason: 'no-session' }
   }
 
+  // Dispatch the rewind, then write the draft in the same tick (before awaiting
+  // the slow file-restore handler) so the composer updates instantly.
+  const command = session.command(`/${ENGINE_COMMAND} @${seq} both`)
+  const raw = deps.getRaw(deps.flowKey)
+  let refilled = false
+  if (raw !== undefined) {
+    try {
+      deps.setDraft(raw)
+      refilled = true
+    } catch {
+      // keep going: the rewind itself may still be useful
+    }
+  }
+
   let result: CommandResult
   try {
-    result = await session.command(`/${ENGINE_COMMAND} @${seq} both`)
+    result = await command
   } catch {
-    return { ok: false, refilled: false, reason: 'command-threw' }
+    return { ok: false, refilled, reason: 'command-threw' }
   }
-  if (result?.ok !== true) return { ok: false, refilled: false, reason: 'command-rejected' }
-  if (result.value?.matched === false) {
-    return { ok: false, refilled: false, reason: 'command-unmatched' }
-  }
-
-  // The admission result is synchronous; give the surface a moment to drop the
-  // message so we do not race the re-render that removes the row.
-  const sleep = deps.sleep ?? defaultSleep
-  await waitForSeqGone(
-    deps.getUiConversation,
-    deps.sessionId,
-    seq,
-    sleep,
-    deps.waitMs ?? 2000,
-  )
-
-  const raw = deps.getRaw(deps.flowKey)
-  if (raw === undefined) return { ok: true, refilled: false, reason: 'no-raw' }
-  try {
-    deps.setDraft(raw)
-  } catch {
-    return { ok: true, refilled: false, reason: 'draft-failed' }
-  }
-  return { ok: true, refilled: true }
+  if (result?.ok !== true) return { ok: false, refilled, reason: 'command-rejected' }
+  if (result.value?.matched === false) return { ok: false, refilled, reason: 'command-unmatched' }
+  return { ok: true, refilled }
 }
