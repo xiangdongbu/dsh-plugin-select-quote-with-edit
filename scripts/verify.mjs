@@ -249,8 +249,8 @@ try {
 
 check('client exports apply()', typeof exports.apply === 'function')
 check(
-  'client inject list is [slots, locale]',
-  Array.isArray(exports.inject) && exports.inject.join(',') === 'slots,locale',
+  'client inject list is [slots, locale, sessions]',
+  Array.isArray(exports.inject) && exports.inject.join(',') === 'slots,locale,sessions',
   JSON.stringify(exports.inject),
 )
 
@@ -474,6 +474,29 @@ check(
     clientCode.includes('dsqe_undoBtn') &&
     clientCode.includes('rewind-plugin') &&
     clientCode.includes('data-chat-anchor-key'),
+)
+check(
+  'composer chip swaps its icon for the delete × on hover',
+  clientCode.includes('dsqe-chipDelIcon') &&
+    clientCode.includes('dsqe-chipIcon') &&
+    clientCode.includes('data-x-shown'),
+)
+check(
+  'quote rows reserve constant action-row height (no layout jump)',
+  clientCode.includes('dsqe_rowQuote') && !clientCode.includes('dsqe_rowPad'),
+)
+check(
+  'sent quote bubble no longer duplicates the quote body text',
+  !clientCode.includes('dsqe-quoteBody'),
+)
+check(
+  'withdraw engine is bundled: dsh-rewind-plugin dependency + bundle row',
+  typeof pkg.dependencies?.['dsh-rewind-plugin'] === 'string' &&
+    readFileSync(resolve(root, 'cordis.patch.yml'), 'utf8').includes('dsh-rewind-plugin'),
+)
+check(
+  'the other plugin\'s ↶ button is hidden to avoid a duplicate',
+  clientCode.includes('dsh-rewind-btn'),
 )
 
 // ---------------------------------------------------------------- withdraw engine

@@ -96,6 +96,10 @@ export function UserMessageView(
       })
     }
     row.classList.add('dsqe_row')
+    // Quote bubbles have no host action row, so reserve the action-row height
+    // permanently (see .dsqe_rowQuote). Constant height = no layout jump when
+    // the hover row shows/hides.
+    row.classList.toggle('dsqe_rowQuote', scanQuotes(raw).quotes.length > 0)
   }, [raw, time, seq])
 
   const scanned = scanQuotes(raw)
@@ -148,11 +152,6 @@ export function UserMessageView(
               ))}
               {text ? <span className="dsqe-bubbleText">{text}</span> : null}
             </div>
-            {scanned.quotes.map((quote, index) => (
-              <div key={`${quote.id}-body-${index}`} className="dsqe-quoteBody">
-                {quote.text}
-              </div>
-            ))}
           </div>
         </div>
       </div>

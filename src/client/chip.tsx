@@ -105,23 +105,29 @@ export function QuoteChip(props: {
       }}
       onMouseLeave={scheduleClose}
     >
-      {open && onRemove ? (
-        <button
-          type="button"
-          className="dsqe-chipDel"
-          aria-label={t('chip.remove')}
-          title={t('chip.remove')}
-          onPointerDown={(event) => event.preventDefault()}
-          onClick={(event) => {
-            event.stopPropagation()
-            onRemove()
-          }}
-        >
-          <XIcon />
-        </button>
-      ) : null}
-      <span ref={chipRef} className={cx('dsqe-chip', small && 'dsqe-chipSm')}>
-        <QuoteIcon />
+      <span
+        ref={chipRef}
+        className={cx('dsqe-chip', small && 'dsqe-chipSm')}
+        data-x-shown={open && onRemove ? 'true' : undefined}
+      >
+        {onRemove ? (
+          <button
+            type="button"
+            className="dsqe-chipDelIcon"
+            aria-label={t('chip.remove')}
+            title={t('chip.remove')}
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={(event) => {
+              event.stopPropagation()
+              onRemove()
+            }}
+          >
+            <XIcon />
+          </button>
+        ) : null}
+        <span className="dsqe-chipIcon">
+          <QuoteIcon />
+        </span>
         <span className="dsqe-chipText">{quote.text}</span>
       </span>
       {open

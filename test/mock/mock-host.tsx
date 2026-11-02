@@ -724,7 +724,10 @@ function textNodeMap(host: Element): { node: Text; start: number; end: number }[
       hostEditInRow: document.querySelector('[data-clock="start"] .dsqe_hostEdit') !== null,
       hostUndoInRow: document.querySelector('[data-clock="start"] .dsqe_hostUndo') !== null,
       rewind: { ...rewindAudit },
-      pluginRowPad: document.querySelector('.dsqe_rowPad') !== null,
+      pluginRowPad: document.querySelector('.dsqe_rowQuote') !== null,
+      quoteBodyShown: document.querySelector('[data-dsqe-quote-bubble] .dsqe-quoteBody') !== null,
+      chipXShown: document.querySelector('.dsqe-chipRow .dsqe-chip')?.getAttribute('data-x-shown') === 'true',
+      chipDelSeparate: document.querySelector('.dsqe-chipRow .dsqe-chipCluster > .dsqe-chipDelIcon') !== null,
       timeText: document.querySelector('.dsqe_time')?.textContent ?? null,
       actionGap: (() => {
         const row = document.querySelector('.dsqe_actions')?.parentElement as HTMLElement | null

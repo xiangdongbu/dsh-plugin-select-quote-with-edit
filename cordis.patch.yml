@@ -2,6 +2,15 @@
 # profile's roster. The row addresses the plugin by PACKAGE NAME: the node half
 # (exports ".") runs in the host process, and the `dsh.client` declaration in
 # package.json makes the browser half (exports "./client") load in the web GUI.
+#
+# The second row mounts `dsh-rewind-plugin` — the withdraw engine that performs
+# the in-place conversation rewind and workspace file restore. It is a
+# dependency of this package, so installing this plugin installs it too. The
+# plugin hides that engine's own ↶ button (see styles.ts `.dsh-rewind-btn`) and
+# drives its `/rewind-plugin @<seq> both` command from the ↶ button it adds next
+# to 「编辑」.
 - insert:
     - id: select-quote-with-edit
       name: 'dsh-plugin-select-quote-with-edit'
+    - id: dsh-rewind-plugin
+      name: 'dsh-rewind-plugin'

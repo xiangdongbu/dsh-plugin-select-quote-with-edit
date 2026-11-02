@@ -53,12 +53,17 @@ body[data-ds-dark-theme] {
 
 /* ---------- 消息行标记（悬停 chrome / 编辑器的定位上下文） ---------- */
 .dsqe_row { position: relative; }
-.dsqe_rowPad {
-  --dsqe-hover-pad: 30px;
-  padding-bottom: var(--dsqe-hover-pad) !important;
-}
+/* Quote bubbles have no host action row of their own, so reserve the action
+   row's height permanently. The row is shown/hidden on hover without changing
+   layout, which keeps messages from jumping when the pointer enters/leaves. */
+.dsqe_rowQuote { padding-bottom: calc(28px + var(--dsh-content-font-delta, 0px)) !important; }
 .dsqe_rowEditing .dsqe_marker { display: none; }
 .dsqe_marker { display: contents; }
+
+/* dsh-rewind-plugin renders its own per-message ↶ button when both plugins are
+   active. This plugin owns the withdraw affordance (one-click, no mode popover),
+   so hide the other one to avoid two undo icons in the same action row. */
+.dsh-rewind-btn { display: none !important; }
 
 /* ---------- 划词工具条 ---------- */
 .dsqe-toolbar {
@@ -126,6 +131,32 @@ body[data-ds-dark-theme] {
   cursor: default;
 }
 .dsqe-chip svg { width: 14px; height: 14px; flex: none; opacity: 0.9; }
+/* The delete × occupies the leading icon's slot on hover (data-x-shown swaps
+   them), so the pill never changes width and there is no separate delete
+   button hanging off the chip's left edge. */
+.dsqe-chipIcon {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.dsqe-chipDelIcon {
+  appearance: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  background: transparent;
+  color: var(--dsqe-chip-label);
+  cursor: pointer;
+}
+.dsqe-chipDelIcon:hover { color: var(--dsqe-label); }
+.dsqe-chip[data-x-shown='true'] .dsqe-chipDelIcon { display: inline-flex; }
+.dsqe-chip[data-x-shown='true'] .dsqe-chipIcon { display: none; }
 .dsqe-chipText {
   min-width: 0;
   max-width: 128px;
@@ -142,24 +173,7 @@ body[data-ds-dark-theme] {
   border-color: transparent;
 }
 .dsqe-chipSm svg { width: 13px; height: 13px; }
-.dsqe-chipDel {
-  appearance: none;
-  border: 0;
-  margin: 0;
-  padding: 0;
-  flex: none;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  color: var(--dsqe-label-2);
-  cursor: pointer;
-}
-.dsqe-chipDel:hover { background: rgba(127, 127, 127, 0.18); color: var(--dsqe-label); }
-.dsqe-chipDel svg { width: 12px; height: 12px; }
+.dsqe-chipSm .dsqe-chipDelIcon { width: 13px; height: 13px; }
 
 /* ---------- 输入框内的 chip 行 ---------- */
 .dsqe-chipRow {
@@ -235,7 +249,6 @@ body[data-ds-dark-theme] {
   gap: 8px;
 }
 .dsqe-bubbleText { min-width: 0; }
-.dsqe-quoteBody { margin-top: 6px; white-space: pre-wrap; }
 .dsqe-userImages {
   display: flex;
   flex-direction: column;
@@ -244,42 +257,53 @@ body[data-ds-dark-theme] {
 }
 .dsqe-userImages img { max-width: 240px; max-height: 240px; border-radius: 12px; }
 
-/* ---------- 悬停操作行（时间 / 编辑 / 复制） ---------- */
+/* ---------- 悬停操作行（时间 / 复制 / 编辑 / 撤回） ----------
+   Metrics mirror the host's own MessageIconActions row (28px buttons, 15px
+   glyphs, 8px gap, 13px time with 12px right padding) so the plugin-drawn row
+   under a quote bubble and the host row under a plain message look identical. */
 .dsqe_actions {
   position: absolute;
-  /* 行在悬停时带 30px 底部留白；从行底回退这段留白再贴 4px，
-     让操作行紧贴气泡下缘（参考 UI 的间距） */
-  top: calc(100% - var(--dsqe-hover-pad, 30px) + 4px);
+  /* The quote row permanently reserves 28px of action-row height; anchor the
+     overlay 4px under the bubble so it never changes layout on show/hide. */
+  top: calc(100% - 28px + 4px);
   right: 10px;
   display: none;
   align-items: center;
+  gap: 8px;
+  height: calc(28px + var(--dsh-content-font-delta, 0px));
   z-index: 6;
 }
 .dsqe_actions[data-shown='true'] { display: inline-flex; }
 .dsqe_time {
-  font-size: 12px;
-  line-height: 17px;
-  color: var(--dsqe-label-2);
-  margin-right: 8px;
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(24px + var(--dsh-content-font-delta, 0px));
+  color: var(--dsw-alias-label-tertiary, var(--dsqe-label-2));
+  padding-right: 12px;
   user-select: none;
 }
 .dsqe_iconBtn {
   appearance: none;
   border: 0;
   margin: 0;
-  padding: 0;
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
+  padding: 6px;
+  width: calc(28px + var(--dsh-content-font-delta, 0px));
+  height: calc(28px + var(--dsh-content-font-delta, 0px));
+  border-radius: var(--dsw-radius-sm, 6px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: transparent;
-  color: var(--dsqe-label-2);
+  color: var(--dsw-alias-label-tertiary, var(--dsqe-label-2));
   cursor: pointer;
 }
-.dsqe_iconBtn:hover { background: rgba(127, 127, 127, 0.16); color: var(--dsqe-label); }
-.dsqe_iconBtn svg { width: 14px; height: 14px; }
+.dsqe_iconBtn:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.16));
+  color: var(--dsw-alias-label-secondary, var(--dsqe-label));
+}
+.dsqe_iconBtn svg {
+  width: calc(15px + var(--dsh-content-font-delta, 0px));
+  height: calc(15px + var(--dsh-content-font-delta, 0px));
+}
 
 /* The pencil injected into the host's own actions row follows the host
    action-button metrics (28px box, 15px glyph, product alias tokens) so it

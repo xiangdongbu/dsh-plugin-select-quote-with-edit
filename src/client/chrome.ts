@@ -308,32 +308,31 @@ function showActions(row: HTMLElement): void {
   if (actionsRow === row) return
   hideActionsImmediate()
   // The host already provides the single actions row for delegated (plain)
-  // messages: no plugin row, no hover padding — just add the pencil + undo to it.
-  row.classList.remove('dsqe_rowPad')
+  // messages: just add the pencil + undo to it (no reserved padding needed —
+  // the host row is always laid out).
   if (ensureEditInHostRow(row)) return
   // Quote bubbles are plugin-drawn with no host row: keep the plugin's own
-  // action row (time / copy / edit / undo) under the bubble.
+  // action row (time / copy / edit / undo) under the bubble. The row already
+  // reserves this height via .dsqe_rowQuote, so showing the overlay never
+  // changes layout (no message jump).
   if (actionsEl === null) buildActions()
   timeEl!.textContent = formatTime(entry.time)
   timeEl!.style.display = timeEl!.textContent === '' ? 'none' : ''
   row.appendChild(actionsEl!)
   actionsEl!.dataset.shown = 'true'
   actionsRow = row
-  row.classList.add('dsqe_rowPad')
 }
 
 function hideActionsImmediate(): void {
   actionsEl?.remove()
   if (actionsEl !== null) actionsEl.dataset.shown = 'false'
-  actionsRow?.classList.remove('dsqe_rowPad')
   actionsRow = null
 }
 
 /**
  * Hide after a short delay, but abort when the pointer is still inside the
- * row's current box: removing the hover padding shifts the content up, which
- * can put the pointer back over the bubble — without this guard the row
- * would flicker show/hide.
+ * row's current box: the row keeps a fixed height now, so this is purely a
+ * flicker guard for the pointer crossing the bubble/action boundary.
  */
 function scheduleHide(row: HTMLElement): void {
   if (hideTimer !== null) window.clearTimeout(hideTimer)
