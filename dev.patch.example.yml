@@ -5,10 +5,11 @@
 #   # 把 <CHECKOUT> 替换成仓库在本机的绝对路径
 #   dsh web --patch "$PWD/dev.patch.yml"
 #
-# `dsh-rewind-plugin` 是「撤回」的引擎（对话回退 + 文件还原），是本仓库的
-# 运行时依赖。开发环境里也需能按包名解析到它（默认 profile 已安装即可）。
+# 「撤回」的引擎 dsh-rewind-plugin 是本仓库的运行时依赖。若你的开发 profile
+# 里能按包名解析到它（例如默认 profile 已安装），取消下面 dsh-rewind-plugin
+# 一行的注释即可启用撤回；否则撤回按钮会提示失败，其余功能不受影响。
 - insert:
     - id: select-quote-with-edit
       name: '<CHECKOUT>/lib/index.js'
-    - id: dsh-rewind-plugin
-      name: 'dsh-rewind-plugin'
+    # - id: dsh-rewind-plugin
+    #   name: 'dsh-rewind-plugin'
