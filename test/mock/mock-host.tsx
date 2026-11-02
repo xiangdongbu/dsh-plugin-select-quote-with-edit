@@ -82,7 +82,13 @@ function useInput<T>(selector: (state: { draft: string; draftRev: number }) => T
     () => selector(draftStore),
   )
 }
-const inputActions = { setDraft: (text: string) => draftStore.set(text) }
+const inputActions = {
+  setDraft: (text: string) => draftStore.set(text),
+  addAttachments: (ids: readonly string[]): boolean => {
+    conversationAudit.added = [...ids]
+    return true
+  },
+}
 
 // ---------------------------------------------------------------- slot registry
 interface SlotEntry {

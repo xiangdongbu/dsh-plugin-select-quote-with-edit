@@ -649,6 +649,35 @@ check(
     check('withdraw: restored image File keeps media type', seen.files[1]?.type === 'image/jpeg', seen.files[1]?.type)
   }
   {
+    // Preferred path: composer's own inputActions.addAttachments (no scope needed).
+    let addedViaActions = null
+    let created = 0
+    const count = await restoreImages(
+      {
+        sessionId: 's1',
+        session: {
+          readAttachment: async () => ({ ok: true, value: { data: new Uint8Array([1]) } }),
+        },
+        getConversation: () => ({
+          createDrafts: (_sid, files) => {
+            created = files.length
+            return files.map((_f, i) => ({ id: `a${i}` }))
+          },
+        }),
+        addAttachments: (ids) => {
+          addedViaActions = ids
+          return true
+        },
+      },
+      imgs,
+    )
+    check(
+      'withdraw: restores images via the composer addAttachments action',
+      count === 2 && created === 2 && addedViaActions?.join(',') === 'a0,a1',
+      JSON.stringify({ count, created, addedViaActions }),
+    )
+  }
+  {
     const count = await restoreImages(
       { sessionId: 's1', session: undefined, scope: undefined, getConversation: () => undefined },
       imgs,

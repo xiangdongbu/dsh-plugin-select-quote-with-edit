@@ -18,6 +18,8 @@ import type { WithdrawOutcome } from './withdraw.ts'
 
 export interface ComposerActions {
   readonly setDraft: (text: string) => void
+  /** Add already-created draft attachment ids to this composer (host action). */
+  readonly addAttachments?: (ids: readonly string[]) => boolean
 }
 
 export const runtime: {

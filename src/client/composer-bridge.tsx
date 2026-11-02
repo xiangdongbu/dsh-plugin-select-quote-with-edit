@@ -56,6 +56,10 @@ export function ComposerBridge(props: {
               getConversation: () => services?.conversation?.() as ConversationLike | undefined,
               getRaw: (key) => getMessage(key)?.raw,
               getSeq: (key) => getMessage(key)?.seq,
+              getImages: (key) => getMessage(key)?.images,
+              ...(typeof actions?.addAttachments === 'function'
+                ? { addAttachments: (ids: readonly string[]) => actions.addAttachments!(ids) }
+                : {}),
               setDraft: (text) => {
                 runtime.inputActions?.setDraft(text)
               },

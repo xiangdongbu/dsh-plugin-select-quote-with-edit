@@ -10,11 +10,20 @@
  * entries are tiny strings and are not pruned.
  */
 
+/** A durable image reference captured from a message's `image` content block. */
+export interface ImageRef {
+  readonly attachmentId: string
+  readonly mediaType: string
+  readonly name?: string
+}
+
 export interface MessageEntry {
   readonly raw: string
   readonly time?: number
   /** Log seq of the message, when the host exposes it (for ↶ withdraw). */
   readonly seq?: number
+  /** Image references carried by the message (restored into the composer on ↶). */
+  readonly images?: readonly ImageRef[]
 }
 
 const registry = new Map<string, MessageEntry>()

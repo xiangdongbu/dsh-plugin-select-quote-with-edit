@@ -130,6 +130,42 @@ export function seqOfKey(
   return undefined
 }
 
+/**
+ * Wait (bounded) until `seq` is no longer a visible node in the chat snapshot.
+ * After a rewind the client session view rebinds; restoring draft attachments
+ * before that rebind gets them dropped, so image restore waits for the target to
+ * disappear first (mirrors the rewind plugin's own outcome wait). Never throws.
+ */
+export async function waitUntilHidden(
+  getUiConversation: () => UiConversationLike | undefined,
+  sessionId: string,
+  seq: number,
+  timeoutMs = 2000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const snapshot = chatSnapshotOf(getUiConversation(), sessionId)
+    const nodes = snapshot?.nodes
+    if (snapshot === undefined) {
+      // view not ready — nothing to wait for
+      return false
+    }
+    if (nodes === undefined || typeof nodes.values !== 'function') return true
+    let visible = false
+    for (const node of nodes.values()) {
+      if (node?.data?.seq === seq && node.visibility !== 'hidden') {
+        visible = true
+        break
+      }
+    }
+    if (!visible) return true
+    if (Date.now() >= deadline) return false
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 50)
+    })
+  }
+}
+
 /** Image references carried by a message node's `image` content blocks. */
 export function imagesOfKey(
   snapshot: ChatSnapshotLike | undefined,
@@ -167,8 +203,14 @@ const IMAGE_MEDIA_EXTENSION: Record<string, string> = {
 export interface RestoreImagesDeps {
   readonly sessionId: string
   readonly session?: SessionLike
-  readonly scope: unknown
+  /** Session scope handle (fallback path via `conversation.input.for`). */
+  readonly scope?: unknown
   readonly getConversation: () => ConversationLike | undefined
+  /**
+   * Preferred: the composer's own `inputActions.addAttachments`, already bound
+   * to the resident shell. Avoids scope-resolution mismatches.
+   */
+  readonly addAttachments?: (ids: readonly string[]) => boolean
 }
 
 /**
@@ -186,12 +228,13 @@ export async function restoreImages(
   if (images.length === 0) return 0
   const { session } = deps
   const conversation = deps.getConversation()
+  const canAddViaActions = deps.addAttachments !== undefined
+  const canAddViaScope =
+    conversation?.input !== undefined && deps.scope !== undefined && deps.scope !== null
   if (
     session?.readAttachment === undefined ||
-    conversation?.input === undefined ||
-    conversation.createDrafts === undefined ||
-    deps.scope === undefined ||
-    deps.scope === null
+    conversation?.createDrafts === undefined ||
+    (!canAddViaActions && !canAddViaScope)
   ) {
     return 0
   }
@@ -211,7 +254,10 @@ export async function restoreImages(
   if (files.length === 0) return 0
   try {
     const drafts = conversation.createDrafts(deps.sessionId, files)
-    const admitted = conversation.input.for(deps.scope).addAttachments(drafts.map((draft) => draft.id))
+    const ids = drafts.map((draft) => draft.id)
+    const admitted = canAddViaActions
+      ? deps.addAttachments!(ids)
+      : conversation.input!.for(deps.scope).addAttachments(ids)
     if (!admitted) {
       conversation.releaseDraftAttachments?.(drafts)
       return 0
@@ -235,6 +281,10 @@ export interface WithdrawDeps {
   readonly getRaw: (flowKey: string) => string | undefined
   /** fallback seq recorded by the node view, when the snapshot is unavailable. */
   readonly getSeq?: (flowKey: string) => number | undefined
+  /** Image refs recorded by the node view (most reliable source). */
+  readonly getImages?: (flowKey: string) => readonly ImageAttachmentRef[] | undefined
+  /** Composer's own addAttachments action (preferred for image restore). */
+  readonly addAttachments?: (ids: readonly string[]) => boolean
   readonly setDraft: (text: string) => void
 }
 
@@ -273,9 +323,14 @@ export async function withdrawMessage(deps: WithdrawDeps): Promise<WithdrawOutco
     return { ok: false, refilled: false, reason: 'no-session' }
   }
 
-  // Read the message's images before the rewind hides the node.
-  let images = imagesOfKey(snapshot, deps.anchorKey)
-  if (images.length === 0) images = imagesOfKey(snapshot, deps.flowKey)
+  // Read the message's images before the rewind hides the node. The node view
+  // is the most faithful source; the chat snapshot is the fallback.
+  let images = deps.getImages?.(deps.flowKey) ?? []
+  if (images.length === 0) {
+    images = imagesOfKey(snapshot, deps.anchorKey)
+    if (images.length === 0) images = imagesOfKey(snapshot, deps.flowKey)
+  }
+  const scope = sessions?.scope?.(deps.sessionId)
 
   // Dispatch the rewind, then write the draft in the same tick (before awaiting
   // the slow file-restore handler) so the composer updates instantly.
@@ -291,19 +346,6 @@ export async function withdrawMessage(deps: WithdrawDeps): Promise<WithdrawOutco
     }
   }
 
-  // Put images back in the composer in the background (bytes are read async).
-  if (images.length > 0 && deps.getConversation !== undefined) {
-    void restoreImages(
-      {
-        sessionId: deps.sessionId,
-        session,
-        scope: sessions?.scope?.(deps.sessionId),
-        getConversation: deps.getConversation,
-      },
-      images,
-    )
-  }
-
   let result: CommandResult
   try {
     result = await command
@@ -312,5 +354,27 @@ export async function withdrawMessage(deps: WithdrawDeps): Promise<WithdrawOutco
   }
   if (result?.ok !== true) return { ok: false, refilled, reason: 'command-rejected' }
   if (result.value?.matched === false) return { ok: false, refilled, reason: 'command-unmatched' }
+
+  // Restore images AFTER the rewind settles. Doing it before/with the command
+  // raced the rewind's session-view rebind, which dropped the fresh drafts —
+  // that is why images went missing. Wait for the target row to disappear from
+  // the (client) chat view first, then restore. Text refill above stays instant.
+  if (images.length > 0 && deps.getConversation !== undefined) {
+    try {
+      await waitUntilHidden(deps.getUiConversation, deps.sessionId, seq, 2000)
+      await restoreImages(
+        {
+          sessionId: deps.sessionId,
+          session,
+          scope,
+          getConversation: deps.getConversation,
+          ...(deps.addAttachments !== undefined ? { addAttachments: deps.addAttachments } : {}),
+        },
+        images,
+      )
+    } catch {
+      // image restore is best-effort
+    }
+  }
   return { ok: true, refilled }
 }

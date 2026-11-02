@@ -2,7 +2,7 @@ import React, { useLayoutEffect, useRef } from 'react'
 import { scanQuotes, type ParsedQuote } from './protocol.ts'
 import { QuoteChip, type QuoteLike } from './chip.tsx'
 import { pickDelegate } from './host-node.ts'
-import { registerMessage } from './registry.ts'
+import { registerMessage, type ImageRef } from './registry.ts'
 import { ensureHostButtons } from './chrome.ts'
 import type { UserMessageProps } from './context.d.ts'
 import { ensureStyles } from './styles.ts'
@@ -46,6 +46,24 @@ function imageAttachments(content: unknown): unknown[] {
     }
   }
   return images
+}
+
+/** Normalize the message's image attachment blocks for the withdraw refill. */
+function toImageRefs(content: unknown): ImageRef[] {
+  const refs: ImageRef[] = []
+  for (const attachment of imageAttachments(content)) {
+    const candidate = attachment as
+      | { attachmentId?: unknown; mediaType?: unknown; name?: unknown }
+      | undefined
+    if (typeof candidate?.attachmentId !== 'string') continue
+    if (typeof candidate.mediaType !== 'string') continue
+    refs.push({
+      attachmentId: candidate.attachmentId,
+      mediaType: candidate.mediaType,
+      ...(typeof candidate.name === 'string' ? { name: candidate.name } : {}),
+    })
+  }
+  return refs
 }
 
 function toChipQuote(quote: ParsedQuote, index: number): QuoteLike {
@@ -94,6 +112,7 @@ export function UserMessageView(
         raw,
         ...(time !== undefined ? { time } : {}),
         ...(seq !== undefined ? { seq } : {}),
+        images: toImageRefs(node?.data?.content),
       })
     }
     row.classList.add('dsqe_row')
