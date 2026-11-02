@@ -476,6 +476,10 @@ check(
     clientCode.includes('data-chat-anchor-key'),
 )
 check(
+  'host-row edit/undo are removed again when the pointer leaves',
+  clientCode.includes('hostEditBtn?.remove()') && clientCode.includes('hostUndoBtn?.remove()'),
+)
+check(
   'composer chip swaps its icon for the delete × on hover',
   clientCode.includes('dsqe-chipDelIcon') &&
     clientCode.includes('dsqe-chipIcon') &&

@@ -307,10 +307,14 @@ function showActions(row: HTMLElement): void {
   }
   if (actionsRow === row) return
   hideActionsImmediate()
-  // The host already provides the single actions row for delegated (plain)
-  // messages: just add the pencil + undo to it (no reserved padding needed —
-  // the host row is always laid out).
-  if (ensureEditInHostRow(row)) return
+  // The host already provides the actions row for delegated (plain) messages:
+  // just add the pencil + undo to it. Track the row so leaving it removes the
+  // extra buttons again — otherwise a hovered row keeps the full row forever
+  // (the host's own time/copy row stays, ours must follow its reveal).
+  if (ensureEditInHostRow(row)) {
+    actionsRow = row
+    return
+  }
   // Quote bubbles are plugin-drawn with no host row: keep the plugin's own
   // action row (time / copy / edit / undo) under the bubble. The row already
   // reserves this height via .dsqe_rowQuote, so showing the overlay never
@@ -326,6 +330,10 @@ function showActions(row: HTMLElement): void {
 function hideActionsImmediate(): void {
   actionsEl?.remove()
   if (actionsEl !== null) actionsEl.dataset.shown = 'false'
+  // Remove the host-row buttons too: the resting state must match the native
+  // row (time + copy only, exactly as before the plugin), reappearing on hover.
+  hostEditBtn?.remove()
+  hostUndoBtn?.remove()
   actionsRow = null
 }
 
