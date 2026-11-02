@@ -29,7 +29,7 @@ import { watchQuotePaste } from './paste.ts'
  * Both share the `<dsh-quotes>` wire protocol, the same quote store, the same
  * preview panel and the same chat-node view.
  */
-export const inject = ['slots', 'locale', 'sessions']
+export const inject = ['slots', 'locale', 'sessions', 'sidebarRight', 'sidebarRightTabs']
 
 export function apply(ctx: ClientContext): void {
   ensureStyles()

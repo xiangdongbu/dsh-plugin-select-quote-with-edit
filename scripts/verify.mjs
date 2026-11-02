@@ -249,8 +249,9 @@ try {
 
 check('client exports apply()', typeof exports.apply === 'function')
 check(
-  'client inject list is [slots, locale, sessions]',
-  Array.isArray(exports.inject) && exports.inject.join(',') === 'slots,locale,sessions',
+  'client inject list is [slots, locale, sessions, sidebarRight, sidebarRightTabs]',
+  Array.isArray(exports.inject) &&
+    exports.inject.join(',') === 'slots,locale,sessions,sidebarRight,sidebarRightTabs',
   JSON.stringify(exports.inject),
 )
 

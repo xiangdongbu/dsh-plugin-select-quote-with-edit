@@ -5,10 +5,12 @@
  * detected and rendered with line numbers + token colors; everything else is
  * pre-wrap text.
  *
- * All host services are resolved loosely (duck typing — the bundle must not
- * require host packages). When the sidebar services are unavailable (mock
- * harness, Minimal profile) the installer returns null and the caller keeps
- * the local fixed drawer as fallback.
+ * The `sidebarRight` / `sidebarRightTabs` services are declared in the
+ * plugin's `inject` list (same as dsh-file-review) so the host passes them
+ * into the client context. They are still resolved loosely here (duck
+ * typing — the bundle must not require host packages). When they are
+ * unavailable (mock harness, Minimal profile) the installer returns null and
+ * the caller keeps the local fixed drawer as fallback.
  */
 
 import React, { useState } from 'react'
