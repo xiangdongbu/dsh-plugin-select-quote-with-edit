@@ -9,6 +9,7 @@ import { watchMessageChrome } from './chrome.ts'
 import { SelectionToolbar } from './selection-toolbar.tsx'
 import { ComposerPanel } from './composer-panel.tsx'
 import { ComposerBridge } from './composer-bridge.tsx'
+import { QuoteDetailPanel } from './detail.tsx'
 import { UserMessageView } from './transcript.tsx'
 import { pickDelegate } from './host-node.ts'
 import { watchQuotePaste } from './paste.ts'
@@ -60,6 +61,18 @@ export function apply(ctx: ClientContext): void {
         order: 100,
       },
       SelectionToolbar,
+    )
+  })
+
+  // Root: right-hand detail drawer for capsule clicks in sent messages.
+  ctx.slots.inject('shell.overlay', () => {
+    ctx.slots.register(
+      {
+        name: 'shell.overlay',
+        id: 'select-quote-with-edit-detail',
+        order: 110,
+      },
+      QuoteDetailPanel,
     )
   })
 

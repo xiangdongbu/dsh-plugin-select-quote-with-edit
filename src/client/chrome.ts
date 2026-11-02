@@ -17,11 +17,11 @@
 
 import { t } from './i18n.ts'
 import { getMessage } from './registry.ts'
-import { composeMessage, scanQuotes, type Quote } from './protocol.ts'
+import { chipLabel, composeMessage, scanQuotes, type Quote } from './protocol.ts'
 import { runtime } from './runtime.ts'
 import { copyRich, escapeHtml } from './dom.ts'
 import { ensureStyles } from './styles.ts'
-import { SVG_PENCIL, SVG_COPY, SVG_CHECK, SVG_INFO, SVG_QUOTE, SVG_X, SVG_UNDO } from './svg.ts'
+import { SVG_PENCIL, SVG_COPY, SVG_CHECK, SVG_INFO, SVG_QUOTE, SVG_CLIP, SVG_X, SVG_UNDO } from './svg.ts'
 
 const FLOW_ITEM = '[data-chat-flow-key]'
 const COMPOSER_CARD = '[data-composer-card]'
@@ -463,9 +463,9 @@ function chipElement(quote: Quote): HTMLElement {
   // data-x-shown), so the pill never changes width. The preview is a
   // body-level fixed panel above the chip with a short close delay, so the
   // pointer can cross the 8px bridge onto it.
-  chip.innerHTML = `<button type="button" class="dsqe-echipDel" title="${t('editor.removeQuote')}" aria-label="${t('editor.removeQuote')}">${SVG_X}</button><span class="dsqe-echipIcon">${SVG_QUOTE}</span><span class="dsqe-chipText"></span>`
+  chip.innerHTML = `<button type="button" class="dsqe-echipDel" title="${t('editor.removeQuote')}" aria-label="${t('editor.removeQuote')}">${SVG_X}</button><span class="dsqe-echipIcon">${quote.long ? SVG_CLIP : SVG_QUOTE}</span><span class="dsqe-chipText"></span>`
   const text = chip.querySelector('.dsqe-chipText')
-  if (text) text.textContent = quote.text
+  if (text) text.textContent = chipLabel(quote.text)
 
   const del = chip.querySelector('button')
   del?.addEventListener('click', (event) => {

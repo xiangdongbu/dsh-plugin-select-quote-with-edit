@@ -1,6 +1,7 @@
 import React, { useLayoutEffect, useRef } from 'react'
 import { scanQuotes, type ParsedQuote } from './protocol.ts'
 import { QuoteChip, type QuoteLike } from './chip.tsx'
+import { openDetail } from './detail.tsx'
 import { pickDelegate } from './host-node.ts'
 import { registerMessage, type ImageRef } from './registry.ts'
 import { ensureHostButtons } from './chrome.ts'
@@ -67,7 +68,11 @@ function toImageRefs(content: unknown): ImageRef[] {
 }
 
 function toChipQuote(quote: ParsedQuote, index: number): QuoteLike {
-  return { id: `${quote.id}-${index}`, text: quote.text }
+  return {
+    id: `${quote.id}-${index}`,
+    text: quote.text,
+    ...(quote.long ? { long: true } : {}),
+  }
 }
 
 /**
@@ -173,7 +178,12 @@ export function UserMessageView(
           <div className="dsqe-bubble">
             <div className="dsqe-bubbleRow">
               {chipQuotes.map((quote) => (
-                <QuoteChip key={quote.id} quote={quote} small />
+                <QuoteChip
+                  key={quote.id}
+                  quote={quote}
+                  small
+                  onOpen={() => openDetail(quote.text, quote.long === true)}
+                />
               ))}
               {text ? <span className="dsqe-bubbleText">{text}</span> : null}
             </div>

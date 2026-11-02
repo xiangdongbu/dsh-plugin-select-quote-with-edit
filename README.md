@@ -3,6 +3,7 @@
 [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/guide/quickstart)（dsh）的客户端插件，把「划词引用」「消息编辑」「消息撤回」合成一个插件：
 
 - **划词引用**：选中对话文字，浮出「复制 / 添加到对话」；引用以 chip 进入输入框与已发送气泡，悬停查看全文
+- **超长文本胶囊**：把复制的超长文本（≥500 字符）直接粘贴进输入框，自动折叠为一枚胶囊 chip（文档图标 + 截断文本），不撑爆输入框；发送后消息里同样是胶囊，**点击胶囊在右侧边栏打开详情**滚动查看全文
 - **消息编辑**：悬停自己发送的消息，在气泡下方的悬停操作行里出现「编辑」；内联编辑后作为一条新消息发出
 - **消息撤回**：编辑按钮后面再加一个「撤回」↶ 图标，一键回退该消息及其之后的内容、还原本轮改过的文件，并把原文（含引用 chip）填回输入框
 
@@ -18,6 +19,13 @@
 - **发送回显**：引用以协议块随消息交给模型；发送瞬间回显与排队预览里的协议 JSON 自动剥离
 - **气泡回显**：已发送消息渲染为「引用 chip + 正文」——顶部胶囊已表达引用，**下方不再重复铺开引用全文**；悬停 chip 查看全文
 - **随会话持久化**：未发送引用存 localStorage（保留 20 个会话 / 7 天），刷新恢复，跨标签对账；撤回消息带协议块回输入框时自动拆回待发 chip
+
+### 超长文本胶囊
+
+- **粘贴即折叠**：向输入框粘贴 ≥ 500 字符（`LONG_TEXT_THRESHOLD`）的纯文本时，粘贴被拦截，文本不进入编辑器，而是变成一枚**长文本胶囊**（三行文字线的文档图标 + 截断文本 + 悬停 × 删除），与引用 chip 同一套交互；短文本、图片、带引用数据的粘贴不受影响
+- **悬浮预览可滚动**：悬停胶囊浮出全文预览面板，超长内容在面板内**滚动查看**（最大高度 50vh），不会铺满屏幕
+- **发送后仍是胶囊**：全文经 `<dsh-quotes>` 协议块（条目带 `long: true`）随消息交给模型；气泡里渲染为长文本胶囊，**点击即从右侧滑出详情抽屉**——标题「超长文本」，全文滚动展示，`×` 或 `Esc` 关闭
+- **撤回原样还原**：带长文本胶囊的消息撤回后，协议块回填输入框时自动拆回胶囊 chip（长文本标记随 store 持久化保留），直接重发即可
 
 ### 消息编辑
 
@@ -68,7 +76,7 @@ dsh web --patch "$PWD/dev.patch.yml"
 ## 本地验证
 
 ```bash
-npm run check        # typecheck + build + 60 项无头校验
+npm run check        # typecheck + build + 70 项无头校验
 npm run mock         # mock 宿主 + http://127.0.0.1:4173/test/mock/app.html
 ```
 
@@ -81,13 +89,13 @@ mock 宿主复刻 dsh web 客户端 DOM 约定（composer 卡片、lexical 编�
 Each item in the block below is text the user selected ...
 
 <dsh-quotes>
-[{"text":"…"}]
+[{"text":"…"},{"text":"粘贴的超长文本…","long":true}]
 </dsh-quotes>
 
 用户正文
 ```
 
-与 `dsh-plugin-select-quote-simple` / `dsh-plugin-edit` 完全同格：JSON 内 `<` 转义 `\u003c`；展示层只认完整标记对（JSON 坏也剥）；只有完整 + JSON 合法 + 非空数组的块才会还原成待发 chip。
+与 `dsh-plugin-select-quote-simple` / `dsh-plugin-edit` 完全同格：JSON 内 `<` 转义 `\u003c`；展示层只认完整标记对（JSON 坏也剥）；只有完整 + JSON 合法 + 非空数组的块才会还原成待发 chip。`long: true` 标记长文本胶囊（本插件 0.3.0+），旧消息无此字段按普通引用渲染。
 
 ## 实现要点（详见 [docs/internals.md](docs/internals.md)）
 

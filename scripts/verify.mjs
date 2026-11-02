@@ -264,7 +264,13 @@ try {
 }
 
 const slotOf = (name) => registered.slots.filter((entry) => entry.def.name === name)
-check('registers shell.overlay toolbar', slotOf('shell.overlay').length === 1)
+check(
+  'registers shell.overlay toolbar + detail drawer',
+  slotOf('shell.overlay').length === 2 &&
+    slotOf('shell.overlay').some((entry) => entry.def.id === 'select-quote-with-edit-toolbar') &&
+    slotOf('shell.overlay').some((entry) => entry.def.id === 'select-quote-with-edit-detail'),
+  JSON.stringify(slotOf('shell.overlay').map((entry) => entry.def.id)),
+)
 check(
   'registers conversation.input.overlay bridge + card',
   slotOf('conversation.input.overlay').length === 2 &&
@@ -372,6 +378,31 @@ const {
   check('marker survives trim()', marker.trim() === marker && marker.length === 1)
   check('stripDraftMarker removes every occurrence', stripDraftMarker(`a${DRAFT_MARKER}b${DRAFT_MARKER}`) === 'ab')
 }
+{
+  const longText = '长'.repeat(1200)
+  const composed = composeMessage('正文', [{ id: 'q5', text: longText, long: true }])
+  const scanned = scanQuotes(composed)
+  check(
+    'long-text capsule survives compose → scan with the long flag',
+    scanned.quotes.length === 1 &&
+      scanned.quotes[0].text === longText &&
+      scanned.quotes[0].long === true &&
+      scanned.rest === '正文',
+  )
+  const restored = readComposedDraft(composed)
+  check(
+    'rewind-restore keeps the long flag on the refilled capsule',
+    restored !== null && restored.quotes[0].long === true && restored.rest === '正文',
+  )
+  check(
+    'selection quotes keep long unset (backward compatible payload)',
+    scanQuotes(composeMessage('x', [{ id: 'q6', text: '普通引用' }])).quotes[0].long === undefined,
+  )
+  check(
+    'long-text threshold is exported for the paste interceptor',
+    typeof protocol.LONG_TEXT_THRESHOLD === 'number' && protocol.LONG_TEXT_THRESHOLD > 0,
+  )
+}
 
 // ---------------------------------------------------------------- store tests
 {
@@ -439,6 +470,28 @@ const {
   storage.set(oldKey, JSON.stringify({ v: 1, updatedAt: Date.now() - 8 * 24 * 60 * 60 * 1000, items: [{ id: 'x', text: 'old' }] }))
   storeA.addQuote('触发修剪的引用')
   check('prune drops sessions older than 7 days', !storage.has(oldKey))
+
+  // ---- long-text capsule persistence ----
+  {
+    const longKey = 'dsh.select-quote-with-edit.quotes.session-long'
+    const longStore = await compileModule('src/client/store.ts', join(tmp, 'store-long.cjs'))
+    longStore.bindSession('session-long')
+    const longQuote = longStore.addQuote('粘贴的超长文本'.repeat(100), { long: true })
+    const storedPayload = JSON.parse(storage.get(longKey) ?? '{}')
+    check(
+      'addQuote({ long: true }) persists the long flag',
+      longQuote !== null && storedPayload.items?.[0]?.long === true,
+      storage.get(longKey),
+    )
+    const reloaded = await compileModule('src/client/store.ts', join(tmp, 'store-long2.cjs'))
+    reloaded.bindSession('session-long')
+    const restoredList = reloaded.getQuotes()
+    check(
+      'a fresh instance restores the long flag from storage',
+      restoredList.length === 1 && restoredList[0].long === true,
+      JSON.stringify(restoredList),
+    )
+  }
   rmSync(tmp, { recursive: true, force: true })
 }
 
@@ -504,6 +557,17 @@ check(
 check(
   'the other plugin\'s ↶ button is hidden to avoid a duplicate',
   clientCode.includes('dsh-rewind-btn'),
+)
+check(
+  'long-text paste becomes a capsule chip (threshold + doc icon + drawer)',
+  clientCode.includes('LONG_TEXT_THRESHOLD') &&
+    clientCode.includes('SVG_CLIP') &&
+    clientCode.includes('data-openable') &&
+    clientCode.includes('dsqe-drawer'),
+)
+check(
+  'message capsules open the right-hand detail drawer',
+  clientCode.includes('openDetail') && clientCode.includes('select-quote-with-edit-detail'),
 )
 
 // ---------------------------------------------------------------- withdraw engine

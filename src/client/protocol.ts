@@ -10,6 +10,8 @@
 export interface Quote {
   readonly id: string
   readonly text: string
+  /** True for pasted long-text capsules (paste.ts), false for selection quotes. */
+  readonly long?: boolean
 }
 
 export const QUOTES_OPEN = '<dsh-quotes>'
@@ -31,10 +33,21 @@ export function stripDraftMarker(draft: string): string {
   return draft.split(DRAFT_MARKER).join('')
 }
 
+/**
+ * Paste at or above this many characters becomes a long-text capsule chip
+ * instead of literal editor text (see paste.ts).
+ */
+export const LONG_TEXT_THRESHOLD = 500
+
 /** Short one-line preview of a quote body. */
 export function previewTitle(text: string, max = 24): string {
   const oneLine = text.replace(/\s+/g, ' ').trim()
   return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine
+}
+
+/** Chip label: the raw text truncated so a huge paste never bloats the DOM. */
+export function chipLabel(text: string, max = 200): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text
 }
 
 function newQuoteId(): string {
@@ -48,7 +61,10 @@ function newQuoteId(): string {
 export function composeMessage(draft: string, quotes: readonly Quote[]): string {
   const rest = stripDraftMarker(draft).replace(/^\s+/, '')
   if (quotes.length === 0) return rest
-  const payload = quotes.map((quote) => ({ text: quote.text }))
+  const payload = quotes.map((quote) => ({
+    text: quote.text,
+    ...(quote.long ? { long: true } : {}),
+  }))
   // `<` must not appear literally inside the payload: a quote containing
   // `</dsh-quotes>` would close the block early. JSON.parse restores it.
   const json = JSON.stringify(payload).replace(/</g, '\\u003c')
@@ -108,6 +124,7 @@ function joinedRest(parts: BlockParts): string {
 export interface ParsedQuote {
   readonly id: string
   readonly text: string
+  readonly long?: boolean
 }
 
 export interface QuoteScan {
@@ -133,7 +150,8 @@ export function scanQuotes(text: string): QuoteScan {
     if (typeof body !== 'string') continue
     const trimmed = body.trim()
     if (!trimmed) continue
-    quotes.push({ id: newQuoteId(), text: trimmed })
+    const long = (entry as { long?: unknown }).long === true
+    quotes.push({ id: newQuoteId(), text: trimmed, ...(long ? { long: true } : {}) })
   }
   return { quotes, rest }
 }
@@ -161,7 +179,8 @@ export function readComposedDraft(text: string): ComposedDraftScan | null {
     if (typeof body !== 'string') continue
     const trimmed = body.trim()
     if (!trimmed) continue
-    quotes.push({ id: newQuoteId(), text: trimmed })
+    const long = (entry as { long?: unknown }).long === true
+    quotes.push({ id: newQuoteId(), text: trimmed, ...(long ? { long: true } : {}) })
   }
   if (quotes.length === 0) return null
   return { quotes, rest: joinedRest(parts) }

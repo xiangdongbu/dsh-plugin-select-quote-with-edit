@@ -174,6 +174,9 @@ body[data-ds-dark-theme] {
 }
 .dsqe-chipSm svg { width: 13px; height: 13px; }
 .dsqe-chipSm .dsqe-chipDelIcon { width: 13px; height: 13px; }
+/* Message-bubble capsules open the detail drawer on click. */
+.dsqe-chip[data-openable='true'] { cursor: pointer; }
+.dsqe-chip[data-openable='true']:hover { background: var(--dsqe-chip-hover, rgba(127, 127, 127, 0.26)); }
 
 /* ---------- 输入框内的 chip 行 ---------- */
 .dsqe-chipRow {
@@ -216,6 +219,88 @@ body[data-ds-dark-theme] {
   overflow-wrap: anywhere;
 }
 .dsqe-tip svg { width: 14px; height: 14px; flex: none; margin-top: 3px; opacity: 0.85; }
+/* Long bodies scroll inside the hover preview instead of covering the screen. */
+.dsqe-tip {
+  max-height: min(340px, 50vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* ---------- 消息胶囊点击后的右侧详情抽屉 ---------- */
+.dsqe-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 70;
+  width: min(440px, 88vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--dsqe-surface);
+  -webkit-backdrop-filter: ${BACKDROP};
+  backdrop-filter: ${BACKDROP};
+  border-left: 0.5px solid var(--dsqe-border);
+  box-shadow: var(--dsqe-elev);
+  animation: dsqe-drawer-in 0.16s ease-out;
+  font-family: inherit;
+}
+@keyframes dsqe-drawer-in {
+  from { transform: translateX(24px); }
+}
+.dsqe-drawerHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 0.5px solid var(--dsqe-border);
+  flex: none;
+}
+.dsqe-drawerIcon { display: inline-flex; color: var(--dsqe-label-2); }
+.dsqe-drawerIcon svg { width: 15px; height: 15px; }
+.dsqe-drawerTitle {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsqe-label);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.dsqe-drawerClose {
+  appearance: none;
+  border: 0;
+  margin: 0;
+  padding: 6px;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsqe-label-2);
+  cursor: pointer;
+}
+.dsqe-drawerClose:hover {
+  background: rgba(127, 127, 127, 0.16);
+  color: var(--dsqe-label);
+}
+.dsqe-drawerClose svg { width: 15px; height: 15px; }
+.dsqe-drawerBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 21px;
+  color: var(--dsqe-quote-text);
+  user-select: text;
+}
 
 /* ---------- 对话记录里带引用的用户气泡 ---------- */
 .dsqe-userRow {

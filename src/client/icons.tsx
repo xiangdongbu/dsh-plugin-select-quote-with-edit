@@ -21,6 +21,21 @@ export function QuoteIcon(_props: IconProps): React.ReactNode {
   )
 }
 
+/** 超长文本图标：圆角方框内三行文字线（对应粘贴的长文本胶囊）。 */
+export function ClipIcon(_props: IconProps): React.ReactNode {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="1.8" y="2.8" width="12.4" height="10.4" rx="2.6" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        d="M4.9 6h6.2M4.9 8.4h6.2M4.9 10.8h3.6"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 export function CopyIcon(_props: IconProps): React.ReactNode {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

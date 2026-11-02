@@ -18,7 +18,8 @@ src/client/icons.tsx             # React 组件用内联图标
 src/client/svg.ts                # 纯 DOM chrome 用的 SVG 字符串
 src/client/selection-toolbar.tsx # 划词工具条（shell.overlay）
 src/client/composer-panel.tsx    # 输入框 chip 行 + 标记 + 发送折叠 + 撤回还原
-src/client/chip.tsx              # React 引用 chip（输入框/气泡内，悬停全文预览）
+src/client/chip.tsx              # React 引用 chip（输入框/气泡内，悬停全文预览，长文本胶囊图标）
+src/client/detail.tsx            # 右侧详情抽屉（消息胶囊点击打开，模块级 store）
 src/client/host-node.ts          # 委托链解析 + Delegate 类型
 src/client/registry.ts           # flowKey → {raw, time, seq}（node 视图写入，chrome 读取）
 src/client/composer-bridge.tsx   # conversation.input.overlay 桥（inputActions/markFolded/sessionId/withdraw）
@@ -35,7 +36,7 @@ test/mock/                       # mock dsh 客户端（含 -10 模拟消息插�
 
 | 位置 | 类型 | 说明 |
 |---|---|---|
-| `shell.overlay` | list slot | 划词工具条（order 100，root 级常驻） |
+| `shell.overlay` | list slot | 划词工具条（order 100）+ 右侧详情抽屉（order 110），root 级常驻 |
 | `conversation.input.overlay` | list slot | 桥（order 1，发布 inputActions/markFolded）+ chip 行（order 20） |
 | `conversation.chat.node` | keyed slot | `user` / `steering`（`priority: -20`、`locale: 'chat'`）：标记 + 引用气泡 + 委托 |
 | `ctx.locale` | 语言服务 | `register(ns, {zh, en})` + `bind` |
@@ -68,8 +69,11 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 
 **6. 时间格式**：当天 `HH:mm`；昨天 `昨天 HH:mm`；今年 `M月D日 HH:mm`；跨年 `YYYY年M月D日 HH:mm`（文案走词典 time.*）。
 
-**8. 复制携带引用 + 粘贴还原（paste.ts）**
+**8. 复制携带引用 + 粘贴还原 / 长文本胶囊（paste.ts）**
 消息操作行的「复制」写双通道剪贴板（`copyRich`）：`text/plain` = 展示正文；`text/html` = 正文 + 不可见注释 `<!--dsh-quote-data:[{"text":…}]-->`（`<`→`\u003c`、`--`→`\u002d` 转义，防提前闭合）。粘贴到其他应用只看到正文；粘贴进 composer 时 document 捕获阶段的 `paste` 监听器解析标记 → `preventDefault` → 逐条 `addQuote` → `execCommand('insertText')` 在光标处插入正文（失败则 `runtime.draft` 兜底追加）。无标记 / JSON 坏 / 空数组一律不拦截（原生粘贴）。clipboard 写入优先 `navigator.clipboard.write` + `ClipboardItem`（Blob 双通道），降级为选中隐藏富节点 `execCommand('copy')`（HTML 通道保留）。
+
+**9. 超长文本胶囊链（0.3.0+）**
+粘贴进 composer 的纯文本 ≥ `LONG_TEXT_THRESHOLD`（500 字符）且无引用标记时：`preventDefault` → `addQuote(text, { long: true })` 折叠为**长文本胶囊**（`chip.tsx` 按 `quote.long` 渲染三行文字线文档图标 `ClipIcon`；`protocol.chipLabel` 把 chip 的 DOM 文本截到 200 字符防大粘贴撑爆布局，全文只存在于 store / 协议块 / 预览面板）。发送时 `composeMessage` 在协议块条目上序列化 `long: true`；`scanQuotes` / `readComposedDraft` / store 持久化都保留该标记——**撤回还原后胶囊原样回到输入框**。气泡内的胶囊由 transcript 传 `onOpen`，点击经 `detail.tsx` 的模块级 store（`openDetail(text, long)`）打开**右侧详情抽屉**（`shell.overlay` order 110，body portal，标题「超长文本」/「引用详情」，全文滚动展示，× / Esc 关闭）。悬浮预览（React tip 与 chrome 的 DOM 单例 tip）都加了 `max-height: 50vh + overflow-y: auto`，长文本在预览面板内滚动。旧消息条目无 `long` 字段按普通引用渲染，协议向后兼容。
 
 **7. 回显剥离 / storage 对账 / U+200B**：与两个前身插件一致，剥离幂等（合并后只有一份观察器）。
 

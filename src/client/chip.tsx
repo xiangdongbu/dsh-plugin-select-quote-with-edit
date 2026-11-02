@@ -1,12 +1,15 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { t } from './i18n.ts'
-import { QuoteIcon, XIcon } from './icons.tsx'
+import { ClipIcon, QuoteIcon, XIcon } from './icons.tsx'
+import { chipLabel } from './protocol.ts'
 import { cx, ensureStyles } from './styles.ts'
 
 export interface QuoteLike {
   readonly id: string
   readonly text: string
+  /** True for pasted long-text capsules (three-line doc icon instead of quotes). */
+  readonly long?: boolean
 }
 
 interface TipPosition {
@@ -26,10 +29,12 @@ interface TipPosition {
 export function QuoteChip(props: {
   quote: QuoteLike
   onRemove?: () => void
+  /** Click on the chip body opens the right-hand detail drawer (message bubbles). */
+  onOpen?: () => void
   small?: boolean
 }): React.ReactNode {
   ensureStyles()
-  const { quote, onRemove, small } = props
+  const { quote, onRemove, onOpen, small } = props
   const [open, setOpen] = useState(false)
   const [tipPos, setTipPos] = useState<TipPosition | null>(null)
   const chipRef = useRef<HTMLSpanElement | null>(null)
@@ -109,26 +114,38 @@ export function QuoteChip(props: {
         ref={chipRef}
         className={cx('dsqe-chip', small && 'dsqe-chipSm')}
         data-x-shown={open && onRemove ? 'true' : undefined}
+        data-openable={onOpen ? 'true' : undefined}
+        onClick={
+          onOpen
+            ? (event) => {
+                event.stopPropagation()
+                onOpen()
+              }
+            : undefined
+        }
       >
         {onRemove ? (
-          <button
-            type="button"
-            className="dsqe-chipDelIcon"
-            aria-label={t('chip.remove')}
-            title={t('chip.remove')}
-            onPointerDown={(event) => event.preventDefault()}
-            onClick={(event) => {
-              event.stopPropagation()
-              onRemove()
-            }}
-          >
-            <XIcon />
-          </button>
+          (() => {
+            const removeLabel = quote.long ? t('chip.longRemove') : t('chip.remove')
+            return (
+              <button
+                type="button"
+                className="dsqe-chipDelIcon"
+                aria-label={removeLabel}
+                title={removeLabel}
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onRemove()
+                }}
+              >
+                <XIcon />
+              </button>
+            )
+          })()
         ) : null}
-        <span className="dsqe-chipIcon">
-          <QuoteIcon />
-        </span>
-        <span className="dsqe-chipText">{quote.text}</span>
+        <span className="dsqe-chipIcon">{quote.long ? <ClipIcon /> : <QuoteIcon />}</span>
+        <span className="dsqe-chipText">{chipLabel(quote.text)}</span>
       </span>
       {open
         ? createPortal(

@@ -16,6 +16,11 @@ export const SVG_QUOTE =
 export const SVG_X =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>'
 /**
+ * 超长文本——与引用图标同框型的三行文字线（编辑卡里的长文本 chip 用）。
+ */
+export const SVG_CLIP =
+  '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="1.8" y="2.8" width="12.4" height="10.4" rx="2.6" stroke="currentColor" stroke-width="1.3"/><path d="M4.9 6h6.2M4.9 8.4h6.2M4.9 10.8h3.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>'
+/**
  * 撤回（rewind / undo）——一道向左回转的箭头，与「编辑」铅笔、宿主复制图标同一
  * 线性风格。
  */

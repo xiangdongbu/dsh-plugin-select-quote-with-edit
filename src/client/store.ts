@@ -15,7 +15,7 @@ const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 interface StoredPayload {
   v: 1
   updatedAt: number
-  items: { id: string; text: string }[]
+  items: { id: string; text: string; long?: true }[]
 }
 
 function storageAvailable(): boolean {
@@ -41,7 +41,7 @@ function loadFromStorage(sessionId: string): Quote[] {
       if (!item || typeof item.id !== 'string' || typeof item.text !== 'string') continue
       const text = item.text.trim()
       if (!text) continue
-      quotes.push({ id: item.id, text })
+      quotes.push({ id: item.id, text, ...(item.long ? { long: true } : {}) })
     }
     return quotes
   } catch {
@@ -55,7 +55,11 @@ function writeToStorage(sessionId: string, quotes: readonly Quote[]): void {
     const payload: StoredPayload = {
       v: 1,
       updatedAt: Date.now(),
-      items: quotes.map((quote) => ({ id: quote.id, text: quote.text })),
+      items: quotes.map((quote) => ({
+        id: quote.id,
+        text: quote.text,
+        ...(quote.long ? { long: true as const } : {}),
+      })),
     }
     window.localStorage.setItem(STORAGE_PREFIX + sessionId, JSON.stringify(payload))
   } catch {
@@ -157,12 +161,13 @@ export function bindSession(id: string | undefined): void {
   notify()
 }
 
-export function addQuote(text: string): Quote | null {
+export function addQuote(text: string, options?: { long?: boolean }): Quote | null {
   const trimmed = text.trim()
   if (!trimmed) return null
   const quote: Quote = {
     id: `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     text: trimmed,
+    ...(options?.long ? { long: true } : {}),
   }
   setQuotes([...current(), quote])
   return quote
