@@ -51,7 +51,13 @@ export function watchQuotePaste(): () => void {
       }
       if (quotes.length === 0) return
 
+      // preventDefault alone is not enough: Lexical's own paste handler does
+      // not check `defaultPrevented` and would insert the clipboard text a
+      // second time next to our `execCommand` insert. Stop the event here so
+      // `execCommand('insertText')` (which goes through Lexical's beforeinput
+      // input path) is the only insertion.
       event.preventDefault()
+      event.stopImmediatePropagation()
       for (const text of quotes) addQuote(text)
       insertPlain(event, plain)
       return
@@ -59,11 +65,16 @@ export function watchQuotePaste(): () => void {
 
     // Long-text paste: no quote marker, but far more text than belongs in an
     // editor. Swap the literal insert for a capsule chip; nothing enters the
-    // draft. The U+200B marker effect (composer-panel) keeps the send button
-    // usable while only the chip is pending.
+    // draft. `stopImmediatePropagation` is essential here: the host editor is
+    // Lexical, whose own paste handler (onPasteForRichText) does NOT check
+    // `defaultPrevented` — it re-inserts the clipboard text on its own. The
+    // event must never reach the editor root, or the wall of text reappears
+    // next to the capsule. The U+200B marker effect (composer-panel) keeps
+    // the send button usable while only the chip is pending.
     const trimmed = plain.trim()
     if (trimmed.length < LONG_TEXT_THRESHOLD) return
     event.preventDefault()
+    event.stopImmediatePropagation()
     addQuote(trimmed, { long: true })
   }
   document.addEventListener('paste', onPaste, true)
