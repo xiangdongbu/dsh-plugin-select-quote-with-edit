@@ -365,19 +365,10 @@ export async function withdrawMessage(deps: WithdrawDeps): Promise<WithdrawOutco
   // raced the rewind's session-view rebind, which dropped the fresh drafts —
   // that is why images went missing. Wait for the target row to disappear from
   // the (client) chat view first, then restore. Text refill above stays instant.
-  const debug: Record<string, unknown> = {
-    seq,
-    images: images.length,
-    hasAddAttachments: deps.addAttachments !== undefined,
-    hasScope: scope !== undefined && scope !== null,
-    hasConversation: conversation !== undefined,
-    conversationFromScope: scopedConversation !== undefined,
-  }
-  ;(globalThis as unknown as Record<string, unknown>).__dsqeLastWithdraw = debug
   if (images.length > 0 && conversation !== undefined) {
     try {
       await waitUntilHidden(deps.getUiConversation, deps.sessionId, seq, 2000)
-      debug.restored = await restoreImages(
+      await restoreImages(
         {
           sessionId: deps.sessionId,
           session,
@@ -387,8 +378,7 @@ export async function withdrawMessage(deps: WithdrawDeps): Promise<WithdrawOutco
         },
         images,
       )
-    } catch (error) {
-      debug.error = String(error)
+    } catch {
       // image restore is best-effort
     }
   }
