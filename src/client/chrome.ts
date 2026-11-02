@@ -4,9 +4,9 @@
  * Hovering a user message row (tagged by the node view's `data-dsqe-user`
  * marker) surfaces the edit affordance. Plain messages delegate to the host's
  * own actions row (`MessageIconActions`, clock + copy): the plugin injects its
- * pencil button into that single row instead of floating a second one. Quote
- * bubbles are plugin-drawn and come with no host row, so they keep the
- * plugin's own action row (time / edit / copy) below the bubble.
+ * pencil button right after the copy control instead of floating a second
+ * row. Quote bubbles are plugin-drawn and come with no host row, so they keep
+ * the plugin's own action row (time / copy / edit) below the bubble.
  * 「编辑」 replaces the bubble with an inline editor (quote chips + editable
  * text + hint + 取消/发送). 「发送」 writes the re-composed wire text into the
  * resident composer and triggers its own send gesture, so the edit lands as a
@@ -126,7 +126,7 @@ function buildActions(): void {
     void copyMessage()
   })
 
-  actionsEl.append(timeEl, editBtn, copyBtn)
+  actionsEl.append(timeEl, copyBtn, editBtn)
 }
 
 /**
@@ -149,18 +149,39 @@ function buildHostEditButton(): void {
 }
 
 /**
+ * The host action the pencil anchors to: the built-in copy button — the
+ * row's first foreign button. A Tooltip wrapper (if any) around it is part of
+ * the visual unit, so the pencil sits after the wrapper instead of inside it.
+ */
+function copyUnitOf(host: HTMLElement): HTMLElement | null {
+  for (const button of host.querySelectorAll('button')) {
+    if (button === hostEditBtn) continue
+    const parent = button.parentElement
+    return parent !== null && parent !== host && parent instanceof HTMLElement ? parent : button
+  }
+  return null
+}
+
+/**
  * Inject the pencil into the row's host actions row, if the host rendered
  * one. Returns false for quote rows (plugin-drawn bubble, no host row) so the
- * caller falls back to the plugin row. React may rebuild the row and drop the
- * foreign button at any time; callers re-invoke on hover moves and the
- * parentElement check re-appends cheaply.
+ * caller falls back to the plugin row. The pencil always sits right after the
+ * copy button — a fixed spot, not "wherever the row ends": React may rebuild
+ * or reshuffle the row (dropping or displacing the foreign button), so every
+ * call re-checks the position and moves the button back if needed.
  */
 function ensureEditInHostRow(row: HTMLElement): boolean {
   if (editingRow !== null) return false
   const host = row.querySelector(HOST_ACTIONS)
   if (!(host instanceof HTMLElement)) return false
   if (hostEditBtn === null) buildHostEditButton()
-  if (hostEditBtn!.parentElement !== host) host.appendChild(hostEditBtn!)
+  const unit = copyUnitOf(host)
+  if (unit === null) {
+    if (hostEditBtn!.parentElement !== host) host.appendChild(hostEditBtn!)
+    return true
+  }
+  if (hostEditBtn!.parentElement === host && hostEditBtn!.previousElementSibling === unit) return true
+  unit.after(hostEditBtn!)
   return true
 }
 

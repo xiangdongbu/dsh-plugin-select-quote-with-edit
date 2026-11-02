@@ -53,7 +53,7 @@ user/steering 选举胜出后，视图只输出 `display: contents` 标记（`da
 选区准入（起止都在 `[data-chat-flow-key]` 且不在 composer）→ 工具条浮出 → 「添加到对话」进 store（按会话持久化）→ 输入框 chip（U+200B 保发送键）→ 发送手势捕获阶段折叠成协议块 → 回显剥离 → 气泡内 chip 回显 → 撤回还原。
 
 **3. 消息编辑链**（继承自 dsh-plugin-edit）
-悬停标记行 → 普通消息把「编辑」注入宿主自己的操作行（`MessageIconActions` 的 `data-clock="start"` 根元素，React 重建后由 pointerover/pointermove 重注入）；引用气泡无宿主行，退回插件自绘操作行（时间/编辑/复制，`bottom` 定位扣除 30px 悬停留白 + 4px 贴合）→ 编辑卡（引用 chip + contenteditable 正文 + 提示 + 取消/发送，`fit-content` 右对齐、`max-width: 76%`）→ 发送：`runtime.markFolded()` 置折叠守卫 → `setDraft(composeMessage(正文, 剩余引用))` → 40ms 后触发 composer 主发送按钮。
+悬停标记行 → 普通消息把「编辑」注入宿主自己的操作行（`MessageIconActions` 的 `data-clock="start"` 根元素，React 重建后由 pointerover/pointermove 重注入）；引用气泡无宿主行，退回插件自绘操作行（时间/复制/编辑，`bottom` 定位扣除 30px 悬停留白 + 4px 贴合）→ 编辑卡（引用 chip + contenteditable 正文 + 提示 + 取消/发送，`fit-content` 右对齐、`max-width: 76%`）→ 发送：`runtime.markFolded()` 置折叠守卫 → `setDraft(composeMessage(正文, 剩余引用))` → 40ms 后触发 composer 主发送按钮。
 
 **4. 折叠守卫（markFolded，合并后可修的竞态）**
 编辑发送把协议块写回草稿后，composer 面板的「撤回还原」会在 React 提交时读到完整块——若不加守卫会把它反解成待发引用并写 storage，与发送竞态产生残留（后台标签页/慢渲染下必现）。发送前 `runtime.markFolded()` 置 `foldingRef`，撤回还原路径跳过这一次；发送清空草稿后守卫自动复位。
