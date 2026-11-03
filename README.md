@@ -104,7 +104,7 @@ dsh web --patch "$PWD/dev.patch.yml"
 ## 本地验证
 
 ```bash
-npm run check        # typecheck + build + 111 项无头校验
+npm run check        # typecheck + build + 112 项无头校验
 npm run mock         # mock 宿主 + http://127.0.0.1:4173/test/mock/app.html
 ```
 

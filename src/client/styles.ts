@@ -390,6 +390,11 @@ body[data-ds-dark-theme] {
   min-height: 64px;
   padding: 12px 14px 12px 18px;
   border-bottom: 1px solid var(--dsqe-pane-line);
+  /* Opaque: the title bar sits in the same column as the scroller, so keep
+     anything that slips past the sticky header from showing through it. */
+  background: var(--dsqe-pane-bg);
+  position: relative;
+  z-index: 1;
 }
 .dsqe-paneHeading {
   flex: 1;
@@ -463,10 +468,16 @@ body[data-ds-dark-theme] {
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 12px 12px 20px;
+  /* No top padding: a sticky header pins to the scrollport, not to the content
+     box, so padding here stays above the pinned header and the code keeps
+     scrolling through that 12px band — it reads as content leaking out from
+     under the title bar. The gap lives on the card's own margin instead, which
+     scrolls away with it. */
+  padding: 0 12px 20px;
   background: var(--dsqe-pane-canvas);
 }
 .dsqe-fileCard {
+  margin-top: 12px;
   border-radius: 12px;
   background: var(--dsqe-pane-bg);
   box-shadow: 0 0 0 1px var(--dsqe-pane-line), 0 1px 2px rgba(0, 0, 0, 0.04),
@@ -545,6 +556,8 @@ body[data-ds-dark-theme] {
 .dsqe-codeNo {
   position: sticky;
   left: 0;
+  /* Stay above the horizontally scrolling code (same stacking order). */
+  z-index: 1;
   flex: none;
   width: 46px;
   padding-right: 12px;

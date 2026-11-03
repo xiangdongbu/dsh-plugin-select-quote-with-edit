@@ -809,6 +809,13 @@ check(
     clientCode.includes('data-collapsed'),
 )
 check(
+  'the pane scroller has no top padding, so the sticky header cannot be undercut',
+  // A sticky header pins to the scrollport; padding-top would leave a band
+  // above it where the scrolling code shows through.
+  /\.dsqe-paneBody \{[^}]*padding: 0 12px 20px;/.test(clientCode) &&
+    /\.dsqe-fileCard \{[^}]*margin-top: 12px;/.test(clientCode),
+)
+check(
   'the inline editor interleaves chips with the text by their recorded offset',
   clientCode.includes('fillEditBody') &&
     clientCode.includes('readEditBody') &&
