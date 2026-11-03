@@ -884,6 +884,27 @@ check(
   clientCode.includes('chipsInSelection') && clientCode.includes('removeChipsByRef'),
 )
 check(
+  'one press clears chips *and* text (no execCommand, plus a beforeinput path)',
+  // The sweep runs synchronously inside the key handler and again on
+  // `beforeinput` (IME / insertText replace a selection without a printable
+  // keydown). Relying on execCommand('delete') used to leave the typed text
+  // behind — the host ignores it — which is why clearing took two presses.
+  (() => {
+    const execDeletes =
+      (clientCode.split("execCommand('delete')").length - 1) +
+      (clientCode.split('execCommand("delete")').length - 1)
+    return (
+      clientCode.includes('replacesSelectionWithInput') &&
+      clientCode.includes('beforeinput') &&
+      execDeletes === 0
+    )
+  })(),
+)
+check(
+  'cut removes the selection through a keydown the host listens to',
+  /new KeyboardEvent\("keydown", \{ key: "Backspace"/.test(clientCode),
+)
+check(
   'copy writes the v2 clipboard payload with each chip offset',
   clientCode.includes('dsh-quote-data') && clientCode.includes('v: 2'),
 )

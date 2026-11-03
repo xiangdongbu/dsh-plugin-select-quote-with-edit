@@ -121,7 +121,7 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 - **发送**：`chipOrder()` 按**文档顺序**给出胶囊的 quoteId 列表——`_nodeMap` 的遍历顺序是创建顺序，不能用；`ElementNode` 的子节点在这个 Lexical 版本里是**键的链表**（`__first` / `__next` 都是字符串 key，必须经 `_nodeMap.get(key)` 解析成节点，也没有 `__children` 数组）。`spotMapOf(draft, order)` 把「draft 里第 N 个 U+FFFC」换算成「去掉占位符后正文里的字符偏移」，`composeMessage(draft, quotes, spots)` 把它写成 payload 的 `at`；气泡侧 `transcript.bubbleContent()` 按 `at` 把胶囊与文字**交错**渲染（老消息无 `at` 保持「胶囊在前」的旧排版）
 - **撤回回填**：宿主 `setDraft` 会洗掉 `[\uE100-\uE11D\uFFFC]`，所以占位符换成私用区 **U+E000**（`QUOTE_MARK`）：`withQuoteMarks(text, ats)` 写出带标记的草稿，标记落地后 `materializeQuoteMarks(ids)` 一趟遍历把所有标记按顺序换成 chip。**`splitText(0)` 不是切分**（返回原节点、没有尾段），落在文本节点开头的标记必须走「从另一头切」的分支，否则第一枚胶囊永远落不下去；同一个文本节点里的多枚标记要用游标逐个处理，切完一次后面的偏移就失效了
 - **复制 / 粘贴**：`chip-clipboard.ts` 只在「选区里确实有我们的胶囊」时接管 `copy` / `cut`，写 `text/plain`（每枚胶囊内联成 label）+ `text/html`（`<!--dsh-quote-data:{"v":2,"text":…,"quotes":[{text,long?,at?}]}-->`）；块边界最多记一次换行（`pendingBreak = Math.max(pendingBreak, 1)`），不会出现 `\n\n\n`。`paste.ts` 两种载荷都认（v2 / 「复制」消息时的裸数组），带 `at` 时 `addQuote` → `queueQuoteRestore(ids)` → `insertPlain(withQuoteMarks(...))`，由面板的插入 effect 消费队列，避免与「一枚引用插一枚胶囊」的循环抢同一次提交
-- **全选删除**：宿主自己的删除只删文本节点，胶囊会留在空草稿里。`watchChipDeletion()` 先在 DOM 上找「与选区相交的胶囊」（`data-composer-chip-ref`），命中就 `preventDefault` + `execCommand('delete')` 删文本 + `removeChipsByRef()`（update 里 `node.remove()`，随后 `stash` / `owned.delete` / `removeQuote` / `scan`），引用不会残留
+- **全选删除（一次清空）**：宿主的删除路径只走文本节点，元素型 chip 它不碰，所以两边各删一段——但**不能互相打断**。0.7.2 的做法是 `preventDefault` + `execCommand('delete')` + `removeChipsByRef()`：宿主根本不听 `execCommand`，文字留下、胶囊删掉，于是要按两下；而把补删放到 `setTimeout` 里，`editor.update` 又被宿主 pending 的 edit 吞掉（`removed: 2` 但树里仍在）。现在的做法：`watchChipDeletion()` 在 **keydown 里同步** `removeChipsByRef()` 且**不拦截默认行为**，宿主的文字删除照常发生，一次按键全清；`beforeinput`（IME / `insertText` 覆盖选区，没有可打印 keydown）再补一遍。`removeChipsByRef()` 结尾会重读一次树（`committedOf` + `scan`），宿主连同段落一起删掉、没有节点可 `remove()` 的 ref 也要从 store 移除，否则面板会看到「store 有、编辑器没有」再补插一枚。`cut` 因为必须先 `preventDefault`（否则浏览器覆盖剪贴板），删除改为向 root 派发一个 `new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true })`，走宿主真正监听的那条路径
 
 ## 依赖的产品内部约定（升级 dsh 后复核）
 
@@ -157,5 +157,6 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 | 发送后胶囊全堆在正文最前面 | payload 里有没有 `at`：`chipOrder()` 是否为空（`__first` 是键的链表，必须经 `_nodeMap` 解析）；气泡是否走 `bubbleContent` 而不是老排版 |
 | 撤回回填后顺序乱 / 第二枚胶囊没回来 | 看 `marks:nodes` 的 offsets 是否覆盖每枚标记；文本节点开头的标记（offset 0）是否走到 head 分支（`swap:head-failed` 说明 `splitText(0)` 被当成了切分） |
 | 输入框里全选复制不到胶囊 | `chip-clipboard.ts` 有没有接管（剪贴板 HTML 里应有 `"v":2`）；胶囊 DOM 上有没有 `data-composer-chip-ref`（`paintActive()` 打的） |
+| 全选删除要按两下（第一下只删文字或只删胶囊） | 宿主的删除路径只走文本节点、不碰元素型 chip，所以两边的删除必须各管一段，且**不能互相打断**：`preventDefault` 会连宿主的文字删除一起挡掉（`execCommand('delete')` 宿主根本不听），而在 `setTimeout` 里补删 chip 会被宿主 pending 的 edit 吞掉。现在的做法是 keydown 里**同步**删 chip、不拦截默认删除；IME / `insertText` 覆盖选区的路径没有可打印 keydown，靠 `beforeinput` 补一遍 |
 | 侧栏详情滚动时顶部漏出一行内容 | 滚动容器是不是带了 `padding-top`：sticky 卡头贴 scrollport、内边距留在它上方，内容就从缝里过去。`.dsqe-paneBody` 必须 `padding: 0 12px 20px`，间距交给 `.dsqe-fileCard` 的 `margin-top` |
 | 插入胶囊后打的字跑到下一行 | 胶囊是否被直接塞进 root（应走 `placeInBlock`）；光标有没有 U+200B 文本节点落脚 |

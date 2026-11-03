@@ -202,10 +202,14 @@ export function watchChipClipboard(): () => void {
     )
 
     if (event.type !== 'cut') return
-    // Cut: the default was prevented with the copy, so remove the selection
-    // through the editor's own input path (Lexical listens to beforeinput).
+    // Cut: preventing the default (needed above, or the browser overwrites the
+    // clipboard) also cancels the deletion, and the host ignores
+    // execCommand('delete'). Re-dispatch the key the host does listen to —
+    // our own capture handler sees it first and sweeps the chips.
     try {
-      document.execCommand('delete')
+      root.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }),
+      )
     } catch {
       // leaving the text in place is better than a half-deleted draft
     }

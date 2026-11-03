@@ -1034,6 +1034,35 @@ function chipsInSelection(): string[] {
 }
 
 /**
+ * Keys that wipe the current selection rather than moving the caret.
+ *
+ * A selection that spans chips is deleted twice over: the host removes its own
+ * text nodes, we remove the element chips. Caret-moving keys (arrows, Shift,
+ * Tab, …) must not trigger the chip sweep, or merely extending a selection
+ * would eat the quotes.
+ */
+function replacesSelection(key: string): boolean {
+  if (key === 'Backspace' || key === 'Delete' || key === 'Enter') return true
+  // IME confirmation / printable characters replace the selection as well.
+  return key === 'Process' || key.length === 1
+}
+
+/**
+ * Input types that replace the current selection. `beforeinput` is the only
+ * signal for IME / `insertText` typing (Playwright and real IMEs both drive the
+ * composer without a printable `keydown`), so the same sweep has to run there.
+ */
+function replacesSelectionWithInput(inputType: string): boolean {
+  return (
+    inputType === 'insertText' ||
+    inputType === 'insertCompositionText' ||
+    inputType === 'insertFromPaste' ||
+    inputType === 'insertFromDrop' ||
+    inputType.startsWith('delete')
+  )
+}
+
+/**
  * Remove chips by ref: Select-all + Backspace / Delete only drops text nodes
  * in the host's own path, so the chips used to survive in an empty draft.
  */
@@ -1041,6 +1070,7 @@ function removeChipsByRef(refs: readonly string[]): number {
   if (refs.length === 0) return 0
   const editor = ensureAttached()
   if (!editor) return 0
+  trace('removeChips:start', { refs, keys: [...keyOf] })
   let removed = 0
   try {
     editor.update?.(
@@ -1063,55 +1093,91 @@ function removeChipsByRef(refs: readonly string[]): number {
     )
   } catch (error) {
     trace('removeChips:threw', String(error))
-    return 0
   }
-  if (removed === 0) return 0
+  // Re-read the tree: the host may have deleted whole paragraphs (chip
+  // included) before this ran, in which case there is no node left to remove
+  // but the quote must still stop being pending — otherwise the panel sees
+  // "quote in the store, no chip" and helpfully inserts it again.
+  const state = committedOf(editor)
+  if (state !== null) scan(state)
+  let dropped = 0
   for (const ref of refs) {
+    if (state !== null) {
+      if (keyOf.has(ref)) continue
+    } else if (removed === 0) {
+      continue
+    }
     const quote = getQuotes().find((item) => item.id === ref)
-    if (quote !== undefined) stashed.set(ref, quote)
+    if (quote !== undefined) {
+      stashed.set(ref, quote)
+      if (stashed.size > STASH_LIMIT) {
+        const oldest = stashed.keys().next().value
+        if (oldest !== undefined) stashed.delete(oldest)
+      }
+    }
     owned.delete(ref)
     removeQuote(ref)
+    dropped += 1
   }
-  scan(committedOf(editor))
-  trace('removeChips:removed', refs)
-  return removed
+  if (removed === 0 && dropped === 0) return 0
+  trace('removeChips:removed', { removed, dropped })
+  return Math.max(removed, dropped)
 }
 
 /**
- * Swallow Backspace / Delete when it is aimed at one of our chips.
+ * Swallow Backspace / Delete when it is aimed at one of our chips, and keep a
+ * selection-spanning delete from leaving chips behind.
  *
- * Capture phase, so the host's own key handling never sees the key for this
- * case; every other keystroke passes straight through.
+ * Capture phase, so the host's own key handling never sees the key for the
+ * single-chip case; every other keystroke passes straight through.
  */
 export function watchChipDeletion(): () => void {
   if (typeof document === 'undefined') return () => {}
+  const inComposer = (target: EventTarget | null): boolean =>
+    target instanceof HTMLElement &&
+    target.isContentEditable &&
+    target.closest('[data-composer-card]') !== null
+
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (event.key !== 'Backspace' && event.key !== 'Delete') return
     if (event.metaKey || event.ctrlKey || event.altKey) return
-    const target = event.target
-    if (!(target instanceof HTMLElement) || !target.isContentEditable) return
-    if (target.closest('[data-composer-card]') === null) return
-    // A selection that covers chips deletes them too (select-all), on top of
-    // the host's own text deletion.
+    if (!inComposer(event.target)) return
     const selected = chipsInSelection()
+    trace('key:selection', { key: event.key, chips: selected.length })
     if (selected.length > 0) {
-      event.preventDefault()
-      event.stopPropagation()
-      try {
-        document.execCommand('delete')
-      } catch {
-        // text deletion is best effort; the chips must still go
-      }
+      if (!replacesSelection(event.key)) return
+      // Synchronous, and without preventDefault: the host removes the text in
+      // its own pass, we take the chips out here. (An update issued from a
+      // later task gets swallowed by the host's pending edit, and an
+      // execCommand delete in between is ignored — between the two, clearing
+      // the composer used to need one press per kind of content.)
       removeChipsByRef(selected)
       return
     }
+    if (event.key !== 'Backspace' && event.key !== 'Delete') return
     if (!deleteAdjacentChip(event.key === 'Backspace')) return
     event.preventDefault()
     event.stopPropagation()
   }
+
+  // IME input and programmatic `insertText` replace a selection without a
+  // printable keydown, so the same sweep runs on `beforeinput` — the last
+  // moment the DOM still shows what is about to be replaced.
+  const onBeforeInput = (event: Event): void => {
+    const input = event as InputEvent
+    if (typeof input.inputType !== 'string') return
+    if (!replacesSelectionWithInput(input.inputType)) return
+    if (!inComposer(event.target)) return
+    const selected = chipsInSelection()
+    if (selected.length === 0) return
+    trace('input:selection', { inputType: input.inputType, chips: selected.length })
+    removeChipsByRef(selected)
+  }
+
   document.addEventListener('keydown', onKeyDown, true)
+  document.addEventListener('beforeinput', onBeforeInput, true)
   return () => {
     document.removeEventListener('keydown', onKeyDown, true)
+    document.removeEventListener('beforeinput', onBeforeInput, true)
   }
 }
 
