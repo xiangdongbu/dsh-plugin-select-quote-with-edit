@@ -8,6 +8,10 @@ import React, {
 } from 'react'
 import { composerCardOf, isSubmitKey, willSubmit } from './dom.ts'
 import { QuoteChip } from './chip.tsx'
+import { t } from './i18n.ts'
+import { openDetail } from './detail.tsx'
+import { clearSourceMark, getSourceMark, locateQuote } from './locate.ts'
+import { useSourceMark } from './source-mark.tsx'
 import {
   clearQuotes,
   bindSession,
@@ -68,6 +72,7 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
   const { useInput, inputActions, sessionId } = props
   const draft = useInput ? useInput((state) => state.draft) : ''
   const [items, setItems] = useState<readonly Quote[]>([])
+  const located = useSourceMark()
   const stackRef = useRef<HTMLDivElement | null>(null)
   const draftRef = useRef(draft)
   const actionsRef = useRef(inputActions)
@@ -105,6 +110,14 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
     sync()
     return subscribe(sync)
   }, [sync, sessionId])
+
+  // A quote that left the composer (sent, or deleted) must not keep the
+  // transcript underlined — the chip that owns the mark is gone.
+  useEffect(() => {
+    const located = getSourceMark()
+    if (located?.quoteId === undefined) return
+    if (!items.some((quote) => quote.id === located.quoteId)) clearSourceMark()
+  }, [items])
 
   // Reserve draft height under the absolute chip row.
   useEffect(() => {
@@ -206,7 +219,23 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
   return (
     <div ref={stackRef} className="dsqe-chipRow">
       {items.map((quote) => (
-        <QuoteChip key={quote.id} quote={quote} onRemove={() => removeQuote(quote.id)} />
+        <QuoteChip
+          key={quote.id}
+          quote={quote}
+          active={located?.quoteId === quote.id}
+          hint={quote.long ? t('chip.openDetail') : t('chip.locate')}
+          onOpen={() => {
+            // A pasted long body has no source in the transcript — it opens
+            // the detail pane instead. A selection quote scrolls back to its
+            // original position and underlines it there.
+            if (quote.long) {
+              openDetail(quote.text, true)
+              return
+            }
+            locateQuote(quote.text, quote.id)
+          }}
+          onRemove={() => removeQuote(quote.id)}
+        />
       ))}
     </div>
   )

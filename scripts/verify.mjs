@@ -269,9 +269,10 @@ try {
 
 const slotOf = (name) => registered.slots.filter((entry) => entry.def.name === name)
 check(
-  'registers shell.overlay toolbar + detail drawer',
-  slotOf('shell.overlay').length === 2 &&
+  'registers shell.overlay toolbar + source mark + detail drawer',
+  slotOf('shell.overlay').length === 3 &&
     slotOf('shell.overlay').some((entry) => entry.def.id === 'select-quote-with-edit-toolbar') &&
+    slotOf('shell.overlay').some((entry) => entry.def.id === 'select-quote-with-edit-source-mark') &&
     slotOf('shell.overlay').some((entry) => entry.def.id === 'select-quote-with-edit-detail'),
   JSON.stringify(slotOf('shell.overlay').map((entry) => entry.def.id)),
 )
@@ -406,6 +407,100 @@ const {
     'long-text threshold is exported for the paste interceptor',
     typeof protocol.LONG_TEXT_THRESHOLD === 'number' && protocol.LONG_TEXT_THRESHOLD > 0,
   )
+}
+
+// ---------------------------------------------------------------- locate tests
+{
+  const locate = await compileModule('src/client/locate.ts', join(tmp, 'locate.cjs'))
+  const { normalizeQuote, candidateNeedles, buildIndex, findMatch } = locate
+
+  check(
+    'locate: normalization collapses whitespace + the draft zero-width marker',
+    normalizeQuote('  但 \u200b node_modules\n\n里  ') === '但 node_modules 里',
+    JSON.stringify(normalizeQuote('  但 \u200b node_modules\n\n里  ')),
+  )
+
+  // A rendered line: plain text → <code> → plain text, plus a following block.
+  const chunks = [
+    { text: '但 ' },
+    { text: 'node_modules' },
+    { text: ' 里这个包已经不存在了。\n' },
+    { text: '要我把这两段', blockStart: true },
+  ]
+  const index = buildIndex(chunks)
+  check(
+    'locate: row index flattens nodes into one normalized line',
+    index.text === '但 node_modules 里这个包已经不存在了。 要我把这两段',
+    index.text,
+  )
+  const inline = findMatch(index, candidateNeedles('node_modules'))
+  check(
+    'locate: a match inside a code span maps back to that node + offset',
+    inline !== null &&
+      inline.start === 2 &&
+      inline.end === 14 &&
+      index.owner[inline.start] === 1 &&
+      index.offset[inline.start] === 0 &&
+      index.offset[inline.end - 1] === 11,
+    JSON.stringify(inline),
+  )
+  const cross = findMatch(index, candidateNeedles('但 node_modules 里'))
+  check(
+    'locate: a match spanning text + code keeps both ends',
+    cross !== null && index.owner[cross.start] === 0 && index.owner[cross.end - 1] === 2,
+    JSON.stringify(cross),
+  )
+  check(
+    'locate: block boundary supplies the space the DOM never had',
+    findMatch(index, candidateNeedles('不存在了。 要我')) !== null,
+  )
+  check('locate: absent text yields no match', findMatch(index, candidateNeedles('完全不相干的一句话')) === null)
+
+  // A quote whose newline came from a block boundary still matches.
+  const twoBlocks = buildIndex([{ text: '第一段。' }, { text: '第二段', blockStart: true }])
+  check(
+    'locate: quote newline matches the implied block space',
+    findMatch(twoBlocks, candidateNeedles('第一段。\n第二段')) !== null,
+  )
+
+  // Real markup puts a whitespace-only text node between the two blocks; it
+  // must not turn the boundary into two spaces.
+  const gap = buildIndex([
+    { text: '段落一。' },
+    { text: '\n      ', blockStart: true },
+    { text: '段落二', blockStart: true },
+  ])
+  check('locate: a gap node between blocks yields exactly one space', gap.text === '段落一。 段落二', gap.text)
+  check(
+    'locate: cross-block quote still matches through the gap node',
+    findMatch(gap, candidateNeedles('段落一。\n段落二')) !== null,
+  )
+
+  // Same phrase twice: the one nearest the composer wins.
+  const repeated = buildIndex([{ text: '引用文本 A 引用文本 B 引用文本' }])
+  const last = findMatch(repeated, candidateNeedles('引用文本'))
+  check(
+    'locate: the last occurrence wins (nearest the composer)',
+    last !== null && last.start === repeated.text.lastIndexOf('引用文本'),
+    JSON.stringify(last),
+  )
+
+  // Prefix fallback: a selection that crossed something unrenderable.
+  const long = 'A'.repeat(200)
+  const fallbackIndex = buildIndex([{ text: 'x ' + long + '!!' }])
+  check(
+    'locate: an over-long quote still lands via its opening clause',
+    findMatch(fallbackIndex, candidateNeedles(long + 'Z'.repeat(50))) !== null,
+  )
+  const needles = candidateNeedles(long)
+  check(
+    'locate: candidates are longest-first and deduplicated',
+    needles[0] === long && needles.length === 4 && new Set(needles).size === 4,
+    JSON.stringify(needles.map((needle) => needle.length)),
+  )
+  const tiny = candidateNeedles('短引用')
+  check('locate: short quotes keep exactly one candidate', tiny.length === 1 && tiny[0] === '短引用')
+  check('locate: empty text never matches', candidateNeedles('   ').length === 0)
 }
 
 // ---------------------------------------------------------------- store tests
@@ -595,6 +690,17 @@ check(
     clientCode.includes('COMPOSER_MAX_HEIGHT') &&
     clientCode.includes('composerHeight') &&
     clientCode.includes('dblclick'),
+)
+check(
+  'composer chips jump to the source and underline it (no message DOM rewrite)',
+  clientCode.includes('locateQuote') &&
+    clientCode.includes('dsqe-srcMark') &&
+    clientCode.includes('dsqe-srcToast') &&
+    clientCode.includes('select-quote-with-edit-source-mark') &&
+    clientCode.includes('getClientRects') &&
+    clientCode.includes('data-active') &&
+    // The underline must be painted, never injected into the message tree.
+    !clientCode.includes('surroundContents'),
 )
 
 // ---------------------------------------------------------------- withdraw engine

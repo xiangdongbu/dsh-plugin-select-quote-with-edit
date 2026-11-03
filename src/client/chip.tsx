@@ -32,9 +32,13 @@ export function QuoteChip(props: {
   /** Click on the chip body opens the right-hand detail drawer (message bubbles). */
   onOpen?: () => void
   small?: boolean
+  /** The chip whose source text is currently marked in the transcript. */
+  active?: boolean
+  /** Native tooltip: what clicking the chip does. */
+  hint?: string
 }): React.ReactNode {
   ensureStyles()
-  const { quote, onRemove, onOpen, small } = props
+  const { quote, onRemove, onOpen, small, active, hint } = props
   const [open, setOpen] = useState(false)
   const [tipPos, setTipPos] = useState<TipPosition | null>(null)
   const chipRef = useRef<HTMLSpanElement | null>(null)
@@ -115,10 +119,17 @@ export function QuoteChip(props: {
         className={cx('dsqe-chip', small && 'dsqe-chipSm')}
         data-x-shown={open && onRemove ? 'true' : undefined}
         data-openable={onOpen ? 'true' : undefined}
+        data-active={active ? 'true' : undefined}
+        title={hint}
         onClick={
           onOpen
             ? (event) => {
                 event.stopPropagation()
+                // Drop the hover preview first: it floats right above the chip
+                // and would cover the source text we are about to underline.
+                cancelClose()
+                setOpen(false)
+                setTipPos(null)
                 onOpen()
               }
             : undefined

@@ -20,6 +20,8 @@ src/client/selection-toolbar.tsx # 划词工具条（shell.overlay）
 src/client/composer-panel.tsx    # 输入框 chip 行 + 标记 + 发送折叠 + 撤回还原
 src/client/chip.tsx              # React 引用 chip（输入框/气泡内，悬停全文预览，长文本胶囊图标）
 src/client/detail.tsx            # 右侧详情（消息胶囊点击打开，模块级 store + 本地抽屉兜底）
+src/client/locate.ts             # 「定位原文」：拍平索引 + 反查 Range + 滚动 + 标记状态（无 React）
+src/client/source-mark.tsx        # 下划线层（shell.overlay order 90）：Range 的 client rects 叠 fixed 线
 src/client/sidebar-tab.tsx       # 原生右侧边栏详情标签页（sidebarRightTabs + openTabIn，JSON 高亮）
 src/client/composer-resize.ts    # 输入框顶边 grip 拖拽调高（钳制 + localStorage 持久化，双击复原）
 src/client/host-node.ts          # 委托链解析 + Delegate 类型
@@ -38,7 +40,7 @@ test/mock/                       # mock dsh 客户端（含 -10 模拟消息插�
 
 | 位置 | 类型 | 说明 |
 |---|---|---|
-| `shell.overlay` | list slot | 划词工具条（order 100）+ 本地详情抽屉兜底（order 110），root 级常驻 |
+| `shell.overlay` | list slot | 定位下划线层（order 90）+ 划词工具条（order 100）+ 本地详情抽屉兜底（order 110），root 级常驻 |
 | `sidebar.right.pane.tab` (+ `.title`) | keyed slot | 原生侧边栏详情标签页正文（`key` = 标签 id，配合 `sidebarRightTabs.register` + `sidebarRight.openTabIn`） |
 | `conversation.input.overlay` | list slot | 桥（order 1，发布 inputActions/markFolded）+ chip 行（order 20） |
 | `conversation.chat.node` | keyed slot | `user` / `steering`（`priority: -20`、`locale: 'chat'`）：标记 + 引用气泡 + 委托 |
@@ -83,6 +85,11 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 
 **7. 回显剥离 / storage 对账 / U+200B**：与两个前身插件一致，剥离幂等（合并后只有一份观察器）。
 
+**12. 点击 chip 定位原文（0.6.0+，locate.ts + source-mark.tsx）**
+点输入框里的引用 chip → `locateQuote(text, quoteId)`：找容器（`[data-conversation-scroll]` → 最后一条 `[data-chat-flow-key]` 的可滚动祖先 → 全部行的最近公共父级）→ `TreeWalker` 遍历文本节点，跳过 composer 与插件自己的 UI（`[data-composer-card]` / `.dsqe-chip` / `.dsqe-tipWrap` / `.dsqe-drawer` / `.dsqe-sideWrap` / `.dsqe_editor`）→ **拍平**成一个字符串（连续空白压成一个空格；用「最近块级祖先」判断块边界，相邻块之间补一个虚拟空格，替代 DOM 里根本不存在的换行）→ 归一化的引用做 `lastIndexOf`（同一句出现多次取**最后一次**：离输入框最近，几乎总是刚选的那处）→ 命中区间经 `owner/offset` 数组反查回 `(textNode, offset)` 造 `Range`（跨 `<code>` / `<strong>` / 段落都成立）。超长引用按 120/60/30 字符前缀逐级回退（选区跨过被折叠的代码块时仍能落位）。
+
+下划线**不写进消息 DOM**：`Range.getClientRects()` 拿到逐行矩形，`source-mark.tsx` 在 `document.body` 上叠同尺寸的 fixed 指示（淡底 + `inset 0 -2px` 下划线），并按对话滚动容器的矩形裁剪（底部再让出 composer 顶边，避免盖住输入框）。平滑滚动 900ms 内用 rAF 连续重算，之后靠 `scroll`/`resize` 事件跟随；`Range` 脱离文档（消息被撤回、会话切换、行被虚拟化）即自动清除。标记状态是模块级 store（`getSourceMark/subscribeSourceMark`），chip 用 `data-active` 高亮、再点同一枚 chip 关闭（`locateQuote` 返回 `'off'`），`Esc` 或点击别处也关闭；找不到时 `getMissingToken()` 递增，浮出一条 2.6s 提示。粘贴产生的 `long: true` 胶囊没有对话原文，点击仍走右侧详情。
+
 **11. 输入框手动调高（0.5.0+，composer-resize.ts）**
 纯 DOM 装饰（与 hover chrome 同生命周期，`ctx.effect(() => watchComposerResize())`）：MutationObserver 盯 `[data-composer-card]`，出现的卡片加 `dsqe_rzCard`（position:relative）并在顶边中央挂一枚 grip（`dsqe-rzHandle`，absolute top:-5px，76×12 命中区，细横条 `::after` 默认 0.3 透明度、悬停/拖拽 0.75）。`pointerdown` 起拖（Pointer Capture，body 标 `data-dsqe-resizing` 锁选择 + ns-resize 光标）：目标元素 = 卡内 `[data-lexical-editor="true"]` 自身或其最近 `overflow-y: auto/scroll` 祖先（`composerScrollAreaOf`），高度 = 起始高 + (startY − clientY)（输入框贴底，**上拖变高**），写入 inline `height`/`max-height` 并强制 `overflow-y: auto`，钳制在 `COMPOSER_MIN_HEIGHT`(44) ～ `min(COMPOSER_MAX_HEIGHT`(640), 60vh)`；`pointerup` 存 localStorage（`dsh.select-quote-with-edit.composerHeight`），卡片再现时（含刷新后）自动套用；`dblclick` 清 inline 高度 + 清存储复原。与 chip 行的 `--dsqe-pad` 预留互不影响（ResizeObserver 自适应）。
 
@@ -90,7 +97,7 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 
 - `[data-composer-card]` + 主发送按钮为卡片内最后一个 `button`（停止按钮渲染 `svg rect`）；
 - 用户消息悬停操作行根元素带 `data-clock="start"`（助手行是 `end`；CSS module 类名会被哈希，属性是稳定钩子）；
-- `[data-lexical-editor="true"]`、`[data-chat-flow-key]`、`[data-submission-echo]` / `[data-queue-dock]`；
+- `[data-lexical-editor="true"]`、`[data-chat-flow-key]`、`[data-conversation-scroll]`、`[data-submission-echo]` / `[data-queue-dock]`；
 - 槽位 `shell.overlay` / `conversation.input.overlay`（props 带 `useInput`、`inputActions.setDraft`）/ `conversation.chat.node`（user/steering）；
 - `ctx.locale.register/bind`；`ctx.slots.inject/register/entries`；
 - `ctx.get('sessions')` / `ctx.get('uiConversation')`（撤回定位 seq 与发命令用）；`sessions.binding(id).session.command(line)`；
@@ -108,3 +115,4 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 | 悬停没有操作行 | 行内是否有 `data-dsqe-user` 标记；是否正在编辑 |
 | 气泡出现 JSON | 委托链是否落到宿主视图（宿主/兜底路径会剥块） |
 | 预览面板错位/巨大 | JS 与 CSS 的类名前缀是否一致（连字符 vs 下划线） |
+| 点 chip 没滚到原文 / 提示找不到 | 原文是否在已加载消息里；下划线层是否在 `shell.overlay`（order 90）；拍平索引的块边界（`blockOwnerOf`）是否被新渲染结构打乱 |

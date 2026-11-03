@@ -10,6 +10,7 @@ import { SelectionToolbar } from './selection-toolbar.tsx'
 import { ComposerPanel } from './composer-panel.tsx'
 import { ComposerBridge } from './composer-bridge.tsx'
 import { QuoteDetailPanel } from './detail.tsx'
+import { SourceMarkOverlay } from './source-mark.tsx'
 import { installSidebarDetail } from './sidebar-tab.tsx'
 import { UserMessageView } from './transcript.tsx'
 import { pickDelegate } from './host-node.ts'
@@ -64,6 +65,20 @@ export function apply(ctx: ClientContext): void {
         order: 100,
       },
       SelectionToolbar,
+    )
+  })
+
+  // Root: the underline layer for 「定位原文」. Below the toolbar and the
+  // drawer, above the transcript itself — it paints over message text but must
+  // never swallow pointer events (the lines are pointer-events: none).
+  ctx.slots.inject('shell.overlay', () => {
+    ctx.slots.register(
+      {
+        name: 'shell.overlay',
+        id: 'select-quote-with-edit-source-mark',
+        order: 90,
+      },
+      SourceMarkOverlay,
     )
   })
 

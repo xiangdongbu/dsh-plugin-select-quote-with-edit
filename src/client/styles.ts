@@ -38,6 +38,8 @@ body {
   --dsqe-json-str: #116329;
   --dsqe-json-num: #953800;
   --dsqe-json-lit: #8250df;
+  --dsqe-src-line: rgba(37, 99, 235, 0.85);
+  --dsqe-src-bg: rgba(37, 99, 235, 0.09);
 }
 body[data-ds-dark-theme] {
   --dsqe-label: #f0f0f2;
@@ -57,6 +59,8 @@ body[data-ds-dark-theme] {
   --dsqe-json-str: #7ee787;
   --dsqe-json-num: #ffa657;
   --dsqe-json-lit: #d2a8ff;
+  --dsqe-src-line: rgba(138, 180, 255, 0.9);
+  --dsqe-src-bg: rgba(138, 180, 255, 0.15);
 }
 
 /* ---------- 消息行标记（悬停 chrome / 编辑器的定位上下文） ---------- */
@@ -185,6 +189,47 @@ body[data-ds-dark-theme] {
 /* Message-bubble capsules open the detail drawer on click. */
 .dsqe-chip[data-openable='true'] { cursor: pointer; }
 .dsqe-chip[data-openable='true']:hover { background: var(--dsqe-chip-hover, rgba(127, 127, 127, 0.26)); }
+/* The chip whose source is marked in the transcript. */
+.dsqe-chip[data-active='true'] {
+  background: var(--dsqe-src-bg);
+  box-shadow: inset 0 0 0 1px var(--dsqe-src-line);
+}
+
+/* ---------- 「定位原文」下划线层 ---------- */
+/* Painted over the message, never inside it: one fixed line per client rect of
+   the located Range. Inset shadow = the underline itself, sitting on the text
+   baseline; the faint fill makes a long span readable at a glance. */
+.dsqe-srcMark {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+  border-radius: 3px;
+  background: var(--dsqe-src-bg);
+  box-shadow: inset 0 -2px 0 var(--dsqe-src-line);
+  animation: dsqe-src-in 0.2s ease-out;
+}
+@keyframes dsqe-src-in {
+  from { transform: scaleY(0.6); opacity: 0.4; }
+}
+.dsqe-srcToast {
+  position: fixed;
+  left: 50%;
+  bottom: 108px;
+  transform: translateX(-50%);
+  z-index: 65;
+  max-width: min(420px, 86vw);
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: var(--dsqe-surface);
+  -webkit-backdrop-filter: ${BACKDROP};
+  backdrop-filter: ${BACKDROP};
+  box-shadow: var(--dsqe-shadow);
+  color: var(--dsqe-label);
+  font-size: 13px;
+  line-height: 19px;
+  text-align: center;
+  animation: dsqe-rise-in 0.14s ease-out;
+}
 
 /* ---------- 输入框内的 chip 行 ---------- */
 .dsqe-chipRow {
