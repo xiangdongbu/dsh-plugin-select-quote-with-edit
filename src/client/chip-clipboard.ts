@@ -91,11 +91,15 @@ function serialize(fragment: DocumentFragment): CopiedFragment {
   }
 
   const emitText = (value: string): void => {
-    if (value.length === 0) return
+    // Zero-width fillers are the plugin's own caret scaffolding, never user
+    // content: copying them makes the paste re-insert invisible characters
+    // that eat the first Backspace presses after a paste-back.
+    const cleaned = value.replace(/[\u200b\ufeff]/gu, '')
+    if (cleaned.length === 0) return
     flushBreaks()
-    text += value
-    readable += value
-    html += escapeHtml(value)
+    text += cleaned
+    readable += cleaned
+    html += escapeHtml(cleaned)
   }
 
   const walk = (node: Node): void => {

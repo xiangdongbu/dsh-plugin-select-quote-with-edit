@@ -20,7 +20,7 @@
  */
 
 import { addQuote } from './store.ts'
-import { queueQuoteRestore } from './inline-chips.ts'
+import { queueQuoteRestore, removeChipsInSelection } from './inline-chips.ts'
 import { LONG_TEXT_THRESHOLD, withQuoteMarks } from './protocol.ts'
 import { runtime } from './runtime.ts'
 
@@ -110,6 +110,12 @@ export function watchQuotePaste(): () => void {
       // chip-insertion effect (which runs after this handler) sees the queued
       // restore and materializes the chips at their offsets instead of
       // appending them behind the pasted text.
+      //
+      // Sweep the chips the replaced selection holds first: the host deletes
+      // those chip nodes with the selection, but only this tells the store —
+      // otherwise the panel's fallback loop re-inserts every orphaned quote as
+      // a stray chip behind the pasted content.
+      removeChipsInSelection()
       const pairs: { id: string; at?: number }[] = []
       for (const entry of parsed.quotes) {
         const quote = addQuote(entry.text, entry.long === true ? { long: true } : undefined)
@@ -142,6 +148,9 @@ export function watchQuotePaste(): () => void {
     if (trimmed.length < LONG_TEXT_THRESHOLD) return
     event.preventDefault()
     event.stopImmediatePropagation()
+    // Same store bookkeeping as the marker path above: the replaced selection's
+    // chips must not come back as stray chips behind the capsule.
+    removeChipsInSelection()
     addQuote(trimmed, { long: true })
   }
   document.addEventListener('paste', onPaste, true)

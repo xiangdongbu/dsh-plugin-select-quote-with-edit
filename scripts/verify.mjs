@@ -908,6 +908,23 @@ check(
   'copy writes the v2 clipboard payload with each chip offset',
   clientCode.includes('dsh-quote-data') && clientCode.includes('v: 2'),
 )
+check(
+  'copy strips zero-width fillers from the clipboard text',
+  // The plugin's own U+200B caret fillers must never ride the clipboard:
+  // pasting them back used to eat the first Backspace presses invisibly.
+  clientCode.includes('\\u200b\\ufeff') || clientCode.includes('200b'),
+)
+check(
+  'paste sweeps the replaced selection\'s chips (and their quotes)',
+  // execCommand does not fire beforeinput everywhere, so the usual sweep can
+  // miss: without this, the panel's fallback loop re-inserted every orphaned
+  // quote as a stray chip behind the pasted content.
+  (clientCode.split('removeChipsInSelection').length - 1) >= 3,
+)
+check(
+  'tidyFillers removes invisible U+200Bs so Backspace never dead-presses',
+  clientCode.includes('tidyFillers') && clientCode.includes('reuse-next'),
+)
 
 // ---------------------------------------------------------------- withdraw engine
 {

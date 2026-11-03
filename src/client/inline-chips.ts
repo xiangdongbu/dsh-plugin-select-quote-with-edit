@@ -631,6 +631,10 @@ export function materializeQuoteMarks(ids: readonly string[]): boolean {
     return false
   }
   scan(committedOf(editor))
+  // The pasted draft can carry U+200B fillers (an older copy, or the host's
+  // own normalization): drop them now, or Backspace spends its first presses
+  // on characters the user cannot see.
+  tidyFillers()
   trace('marks:placed', { placed, dropped, seen, present: [...present] })
   for (const id of ids) {
     if (present.has(id)) owned.add(id)
@@ -650,6 +654,110 @@ export function hasRestoreMarks(): boolean {
   const map = committedOf(editor)?._nodeMap
   const root = map?.get?.('root') ?? null
   return root !== null && map !== undefined && firstMark(root, map) !== null
+}
+
+/**
+ * Remove the caret filler U+200Bs the plugin (and a paste of an older copy)
+ * left behind, so Backspace never spends a press on an invisible character.
+ *
+ * - With real text anywhere, every U+200B goes — standalone filler nodes and
+ *   runs embedded in typed text alike.
+ * - With only chips pending, exactly one survives: it is what keeps the send
+ *   button enabled while the draft has no characters.
+ *
+ * Must run from a user gesture (keydown) or right after materialization, never
+ * from a later task: the host swallows editor updates issued outside its own
+ * input processing.
+ */
+export function tidyFillers(): boolean {
+  const editor = attached?.editor ?? editorOf()
+  if (!editor) return false
+  let touched = false
+  try {
+    editor.update?.(() => {
+      const state = stateOf(editor)
+      const map = state?._nodeMap
+      const root = map?.get?.('root')
+      if (!map || !root) return
+      // Snapshot the text nodes once; splits below mint fresh nodes on purpose.
+      const texts: LexicalNode[] = []
+      const collect = (node: LexicalNode, depth: number): void => {
+        if (depth > 24) return
+        const text = typeof node.__text === 'string' ? node.__text : null
+        if (text !== null) {
+          if (text.includes(DRAFT_MARKER)) texts.push(node)
+          return
+        }
+        for (const child of childrenOf(node, map)) collect(child, depth + 1)
+      }
+      collect(root, 0)
+      if (texts.length === 0) return
+      const real = texts.some((node) => String(node.__text).replace(DRAFT_MARKER, '').length > 0)
+      /** With nothing but chips pending, the first filler stays (send button). */
+      let kept = false
+      for (const node of texts) {
+        let current: LexicalNode | null = node
+        for (let guard = 0; current !== null && guard < 64; guard += 1) {
+          const text = String(current.__text ?? '')
+          const at = text.indexOf(DRAFT_MARKER)
+          if (at < 0) break
+          if (text.replace(DRAFT_MARKER, '').length === 0) {
+            if (!real && !kept) {
+              kept = true
+              break
+            }
+            const parent = current.getParent?.() ?? null
+            const key = current.getKey?.()
+            try {
+              current.remove?.()
+              touched = true
+            } catch {
+              break
+            }
+            // If the caret sat inside the removed filler, re-anchor it.
+            try {
+              const anchor = state._selection?.anchor
+              if (anchor && anchor.type === 'text' && anchor.key === key) {
+                parent?.select?.(0, 0)
+              }
+            } catch {
+              // caret placement is cosmetic
+            }
+            break
+          }
+          // Embedded run: split it out of the real text, drop the piece, and
+          // keep scanning whatever follows it.
+          if (typeof current.splitText !== 'function') break
+          let runLength = 0
+          while (at + runLength < text.length && text[at + runLength] === DRAFT_MARKER) runLength += 1
+          try {
+            const parts = at > 0 ? current.splitText(at) : [null, current]
+            const tail = (parts[1] ?? null) as LexicalNode | null
+            if (tail === null) break
+            const tailText = String(tail.__text ?? '')
+            if (runLength < tailText.length && typeof tail.splitText === 'function') {
+              const split = tail.splitText(runLength)
+              const filler = (split[0] ?? null) as LexicalNode | null
+              const rest = (split[1] ?? null) as LexicalNode | null
+              filler?.remove?.()
+              touched = true
+              current = rest
+            } else {
+              tail.remove?.()
+              touched = true
+              current = null
+            }
+          } catch {
+            break
+          }
+        }
+      }
+      trace('tidy', { touched, real, nodes: texts.length })
+    }, { discrete: true })
+  } catch (error) {
+    trace('tidy:threw', String(error))
+  }
+  return touched
 }
 
 /**
@@ -878,6 +986,21 @@ function finish(editor: LexicalEditorLike, chip: LexicalNode): boolean {
     // caret somewhere real to sit.
     const TextKlass = textClassOf(editor)
     if (parent && typeof parent.select === 'function' && typeof index === 'number' && TextKlass) {
+      // A text node right after the chip already gives the caret a home — the
+      // split-path tail (placeChip) or an earlier filler. Selecting it costs
+      // nothing; minting a second filler stacks invisible U+200Bs and the user
+      // then presses Backspace on characters that do not exist.
+      const next = chip.getNextSibling?.() ?? null
+      const isTextNode = typeof next?.select === 'function' && typeof (next as { __text?: unknown }).__text === 'string'
+      if (next !== null && isTextNode && typeof next.select === 'function') {
+        try {
+          next.select(0, 0)
+          trace('finish:parent', { name, index, filler: 'reuse-next' })
+          return true
+        } catch (error) {
+          trace('finish:select-threw', String(error))
+        }
+      }
       let filler: LexicalNode | null = null
       try {
         filler = new TextKlass(DRAFT_MARKER)
@@ -1125,6 +1248,19 @@ function removeChipsByRef(refs: readonly string[]): number {
 }
 
 /**
+ * Remove chips (and their pending quotes) covered by the current selection.
+ *
+ * The paste interceptor calls this when it takes over a paste that replaces a
+ * selection holding chips: the host is about to delete those chips with the
+ * selection, but nothing tells the store — and the panel's fallback loop would
+ * then re-insert a chip for every orphaned quote. `execCommand` does not fire
+ * `beforeinput` everywhere, so the usual sweep cannot be relied on here.
+ */
+export function removeChipsInSelection(): number {
+  return removeChipsByRef(chipsInSelection())
+}
+
+/**
  * Swallow Backspace / Delete when it is aimed at one of our chips, and keep a
  * selection-spanning delete from leaving chips behind.
  *
@@ -1154,6 +1290,10 @@ export function watchChipDeletion(): () => void {
       return
     }
     if (event.key !== 'Backspace' && event.key !== 'Delete') return
+    // The plugin's own U+200B caret fillers are invisible: a Backspace that
+    // only eats one looks like a dead key. Sweep them first — synchronously,
+    // inside the gesture, so the host's delete then hits a real character.
+    tidyFillers()
     if (!deleteAdjacentChip(event.key === 'Backspace')) return
     event.preventDefault()
     event.stopPropagation()
