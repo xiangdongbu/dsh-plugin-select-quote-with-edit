@@ -9,12 +9,16 @@ import React, {
 import { composerCardOf, isSubmitKey, willSubmit } from './dom.ts'
 import { QuoteChip } from './chip.tsx'
 import {
+  chipOrder,
   chipPresent,
+  hasRestoreMarks,
   inlineChipsSupported,
   insertQuoteChip,
+  materializeQuoteMarks,
   onChipPresence,
   resetInlineChips,
   setActiveChip,
+  takeQueuedQuoteRestore,
 } from './inline-chips.ts'
 import { t } from './i18n.ts'
 import { openDetail } from './detail.tsx'
@@ -28,7 +32,18 @@ import {
   replaceQuotes,
   subscribe,
 } from './store.ts'
-import { composeMessage, DRAFT_MARKER, QUOTES_OPEN, readComposedDraft, stripDraftMarker, withDraftMarker, type Quote } from './protocol.ts'
+import {
+  composeMessage,
+  DRAFT_MARKER,
+  QUOTES_OPEN,
+  QUOTE_MARK,
+  readComposedDraft,
+  spotMapOf,
+  stripDraftMarker,
+  withDraftMarker,
+  withQuoteMarks,
+  type Quote,
+} from './protocol.ts'
 import { runtime } from './runtime.ts'
 import { ensureStyles } from './styles.ts'
 
@@ -93,6 +108,12 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
   const presentRef = useRef<ReadonlySet<string>>(new Set<string>())
   const seenRef = useRef<Set<string>>(new Set<string>())
   const attemptsRef = useRef(0)
+  /**
+   * Quote ids whose chips are waiting behind QUOTE_MARK characters in a freshly
+   * written draft (withdraw refill / composed paste). Non-null means: do not run
+   * the ordinary insertion — the marks are about to become the chips.
+   */
+  const restoreRef = useRef<string[] | null>(null)
   draftRef.current = draft
   actionsRef.current = inputActions
 
@@ -173,12 +194,22 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
     presentRef.current = new Set<string>()
     seenRef.current = new Set<string>()
     attemptsRef.current = 0
+    restoreRef.current = null
   }, [sessionId])
 
   // Keep the editor in step with the store: every pending quote owns exactly
   // one chip, minted at the caret when it arrives.
   useEffect(() => {
     if (mode !== 'inline') return
+    // A paste already wrote marked text into the editor: swap the marks for
+    // chips instead of appending a second chip per pending quote.
+    const queued = takeQueuedQuoteRestore()
+    if (queued !== null) {
+      materializeQuoteMarks(queued)
+      return
+    }
+    // A restore is in flight: its marks become the chips, in their own passes.
+    if (restoreRef.current !== null || hasRestoreMarks()) return
     const dbg = (globalThis as { __dsqeDebug?: boolean }).__dsqeDebug === true
     if (dbg) {
       console.log('[dsqe] effect', {
@@ -277,7 +308,18 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
       const current = getQuotes()
       if (current.length === 0) return
       foldingRef.current = true
-      actionsRef.current?.setDraft(composeMessage(draftRef.current, current))
+      // Record where each chip sat so the sent message (and a later withdraw)
+      // keeps the user's order instead of stacking every chip up front.
+      const order = chipOrder()
+      const spots = spotMapOf(draftRef.current, order) ?? undefined
+      if ((globalThis as { __dsqeDebug?: boolean }).__dsqeDebug === true) {
+        console.log('[dsqe] fold', {
+          draft: JSON.stringify(draftRef.current),
+          order,
+          spots: spots === undefined ? null : [...spots],
+        })
+      }
+      actionsRef.current?.setDraft(composeMessage(draftRef.current, current, spots))
       clearQuotes()
     }
 
@@ -313,8 +355,8 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
 
   // A rewind/withdraw refills a withdrawn message verbatim, protocol block
   // included. Unfold it here: quotes back into the chips, the user's own
-  // words back into the editor. Runs only when a COMPLETE block is present,
-  // and never for the block this plugin just folded at the send gesture.
+  // words back into the editor — each chip at the offset it was sent from
+  // (`at`), which is what keeps the order the user typed.
   useLayoutEffect(() => {
     if (!draft.includes(QUOTES_OPEN)) {
       foldingRef.current = false
@@ -325,8 +367,34 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
     if (restored === null) return
     foldingRef.current = true
     replaceQuotes(restored.quotes)
+    // Stable sort: two chips at the same offset keep their payload order.
+    const placed = [...restored.quotes]
+      .filter((quote) => typeof quote.at === 'number')
+      .sort((left, right) => (left.at ?? 0) - (right.at ?? 0))
+    if (placed.length > 0) {
+      const ats = placed.map((quote) => quote.at ?? 0)
+      restoreRef.current = placed.map((quote) => quote.id)
+      setDraftSafe(withQuoteMarks(restored.rest, ats))
+      return
+    }
     setDraftSafe(restored.rest)
   }, [draft, sessionId, setDraftSafe])
+
+  // The marked draft is the intermediate step: as soon as it lands, swap each
+  // mark for the chip of the matching quote. Until then the ordinary insert
+  // path stays out of the way (it would append duplicates behind the marks).
+  useLayoutEffect(() => {
+    const pending = restoreRef.current
+    if (pending === null) return
+    if (!draft.includes(QUOTE_MARK) && !hasRestoreMarks()) {
+      // The mark never made it into the draft (host sanitized it): give up on
+      // positions and let the normal insertion place the chips.
+      if (draft.length > 0) restoreRef.current = null
+      return
+    }
+    restoreRef.current = null
+    materializeQuoteMarks(pending)
+  }, [draft])
 
   if (!sessionId || items.length === 0 || mode === 'inline') return null
 

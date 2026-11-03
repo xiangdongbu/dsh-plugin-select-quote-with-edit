@@ -2,11 +2,13 @@ import React, { useLayoutEffect, useRef } from 'react'
 import { scanQuotes, type ParsedQuote } from './protocol.ts'
 import { QuoteChip, type QuoteLike } from './chip.tsx'
 import { openDetail } from './detail.tsx'
+import { locateQuote } from './locate.ts'
 import { pickDelegate } from './host-node.ts'
 import { registerMessage, type ImageRef } from './registry.ts'
 import { ensureHostButtons } from './chrome.ts'
 import type { UserMessageProps } from './context.d.ts'
 import { ensureStyles } from './styles.ts'
+import { t } from './i18n.ts'
 
 function isTextBlock(block: unknown): boolean {
   if (block === null || typeof block !== 'object') return false
@@ -73,6 +75,77 @@ function toChipQuote(quote: ParsedQuote, index: number): QuoteLike {
     text: quote.text,
     ...(quote.long ? { long: true } : {}),
   }
+}
+
+/** What a click on one chip does: underline the source, or open the capsule. */
+function openChip(quote: ParsedQuote, index: number): void {
+  if (quote.long === true) {
+    openDetail(quote.text, true)
+    return
+  }
+  locateQuote(quote.text, `${quote.id}-${index}`)
+}
+
+/**
+ * The bubble body, chip by chip where the user typed them.
+ *
+ * Quotes composed by 0.7.2+ carry `at` (their offset in the message's own
+ * text); interleaving on it restores the order the user saw in the composer.
+ * Older messages have no offsets — those keep the old layout (chips first),
+ * which is exactly what they looked like when they were sent.
+ */
+function bubbleContent(
+  text: string,
+  quotes: readonly ParsedQuote[],
+  small: boolean,
+): React.ReactNode[] {
+  const placed = quotes
+    .map((quote, index) => ({ quote, index, at: quote.at }))
+    .filter((entry): entry is { quote: ParsedQuote; index: number; at: number } =>
+      typeof entry.at === 'number',
+    )
+    .sort((left, right) => left.at - right.at)
+  const chip = (quote: ParsedQuote, index: number): React.ReactNode => (
+    <QuoteChip
+      key={`${quote.id}-${index}`}
+      quote={toChipQuote(quote, index)}
+      small={small}
+      hint={quote.long === true ? t('chip.openDetail') : t('chip.locate')}
+      onOpen={() => openChip(quote, index)}
+    />
+  )
+  if (placed.length === 0) {
+    return [
+      ...quotes.map((quote, index) => chip(quote, index)),
+      text ? (
+        <span key="text" className="dsqe-bubbleText">
+          {text}
+        </span>
+      ) : null,
+    ]
+  }
+  const nodes: React.ReactNode[] = []
+  let cursor = 0
+  for (const entry of placed) {
+    const at = Math.max(cursor, Math.min(text.length, entry.at))
+    if (at > cursor) {
+      nodes.push(
+        <span key={`t-${cursor}`} className="dsqe-bubbleText">
+          {text.slice(cursor, at)}
+        </span>,
+      )
+    }
+    nodes.push(chip(entry.quote, entry.index))
+    cursor = at
+  }
+  if (cursor < text.length) {
+    nodes.push(
+      <span key={`t-${cursor}`} className="dsqe-bubbleText">
+        {text.slice(cursor)}
+      </span>,
+    )
+  }
+  return nodes
 }
 
 /**
@@ -161,7 +234,6 @@ export function UserMessageView(
     const loadImage = rest.loadImage as
       | ((attachment: unknown) => string | undefined)
       | undefined
-    const chipQuotes = scanned.quotes.map(toChipQuote)
     content = (
       <div className="dsqe-userRow">
         <div className="dsqe-userStack" data-dsqe-quote-bubble="true">
@@ -176,17 +248,7 @@ export function UserMessageView(
             </div>
           ) : null}
           <div className="dsqe-bubble">
-            <div className="dsqe-bubbleRow">
-              {chipQuotes.map((quote) => (
-                <QuoteChip
-                  key={quote.id}
-                  quote={quote}
-                  small
-                  onOpen={() => openDetail(quote.text, quote.long === true)}
-                />
-              ))}
-              {text ? <span className="dsqe-bubbleText">{text}</span> : null}
-            </div>
+            <div className="dsqe-bubbleRow">{bubbleContent(text, scanned.quotes, true)}</div>
           </div>
         </div>
       </div>

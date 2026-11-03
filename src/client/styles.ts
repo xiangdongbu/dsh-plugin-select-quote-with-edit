@@ -359,6 +359,7 @@ body[data-ds-dark-theme] {
 
 /* ---------- 原生侧边栏里的胶囊详情标签页（sidebar-tab.tsx） ---------- */
 .dsqe-sideWrap {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -366,6 +367,32 @@ body[data-ds-dark-theme] {
   font-family: inherit;
   box-sizing: border-box;
 }
+/* The host draws the tab strip (title + close); this is the only control the
+   body adds — a copy affordance floating in the corner, like a preview's. */
+.dsqe-sideCopy {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: var(--dsqe-chip-bg);
+  color: var(--dsqe-label-2);
+  cursor: pointer;
+  opacity: 0.85;
+}
+.dsqe-sideCopy:hover {
+  opacity: 1;
+  background: var(--dsqe-border);
+  color: var(--dsqe-label);
+}
+.dsqe-sideCopy svg { width: 14px; height: 14px; }
 .dsqe-sideEmpty {
   padding: 32px 16px;
   text-align: center;
@@ -475,13 +502,16 @@ body[data-dsqe-resizing='true'] {
   overflow-wrap: anywhere;
   box-sizing: border-box;
 }
+/* Inline flow, not flex: a chip sits exactly where the user typed it, in the
+   middle of the text, and the text runs on around it. */
 .dsqe-bubbleRow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
+  display: block;
 }
-.dsqe-bubbleText { min-width: 0; }
+.dsqe-bubbleRow > .dsqe-chipCluster {
+  margin: 0 3px;
+  vertical-align: middle;
+}
+.dsqe-bubbleText { min-width: 0; white-space: pre-wrap; }
 .dsqe-userImages {
   display: flex;
   flex-direction: column;

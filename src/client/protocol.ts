@@ -32,6 +32,16 @@ export const DRAFT_MARKER = '\u200b'
  */
 export const CHIP_PLACEHOLDER = '\uFFFC'
 
+/**
+ * Scratch character used to put a chip back at an exact offset.
+ *
+ * The host's draft sanitizer strips `[\uE100-\uE11D\uFFFC]` from every text it
+ * receives, so U+FFFC cannot survive `setDraft` — but any other private-use
+ * character does. Writing the marked draft, then swapping each mark for a real
+ * chip, is how a withdraw refill (or a paste) restores the original order.
+ */
+export const QUOTE_MARK = '\uE000'
+
 /** The host strips these from any external text: a literal one would forge a chip. */
 const CHIP_PLACEHOLDER_RE = /[\uE100-\uE11D\uFFFC]/gu
 
@@ -72,19 +82,97 @@ function newQuoteId(): string {
 /**
  * Fold pending quotes + the user draft into the outgoing message text.
  * Called only at the send gesture so the composer never shows the JSON.
+ *
+ * `spots` maps a quote id to the character offset it occupied in the user's
+ * own text (`0` = before the first character). The reader side uses it to put
+ * the chip back where it was typed instead of stacking every chip in front of
+ * the message. Omitted / partial maps simply fall back to the old layout.
  */
-export function composeMessage(draft: string, quotes: readonly Quote[]): string {
-  const rest = stripChipPlaceholders(stripDraftMarker(draft)).replace(/^\s+/, '')
+export function composeMessage(
+  draft: string,
+  quotes: readonly Quote[],
+  spots?: ReadonlyMap<string, number>,
+): string {
+  const rest = stripChipPlaceholders(stripDraftMarker(draft))
+    .split(QUOTE_MARK)
+    .join('')
+    .replace(/^\s+/, '')
   if (quotes.length === 0) return rest
-  const payload = quotes.map((quote) => ({
-    text: quote.text,
-    ...(quote.long ? { long: true } : {}),
-  }))
+  const payload = quotes.map((quote) => {
+    const at = spots?.get(quote.id)
+    return {
+      text: quote.text,
+      ...(quote.long ? { long: true } : {}),
+      ...(typeof at === 'number' && Number.isFinite(at) && at >= 0 ? { at: Math.floor(at) } : {}),
+    }
+  })
   // `<` must not appear literally inside the payload: a quote containing
   // `</dsh-quotes>` would close the block early. JSON.parse restores it.
   const json = JSON.stringify(payload).replace(/</g, '\\u003c')
   const block = [PROTOCOL_HEADER, '', QUOTES_OPEN, json, QUOTES_CLOSE].join('\n')
   return rest ? `${block}\n\n${rest}` : `${block}\n\n`
+}
+
+/**
+ * Count the chip slots in a composer draft (one U+FFFC per inline chip).
+ * The host's clipboard projection is the only place a chip is visible as a
+ * character, so this is how the caller learns how many chips precede a paste.
+ */
+export function chipSlots(draft: string): number {
+  let count = 0
+  for (let index = 0; index < draft.length; index += 1) {
+    if (draft[index] === CHIP_PLACEHOLDER) count += 1
+  }
+  return count
+}
+
+/**
+ * Map quote ids (in chip order) to the offset each chip occupies in the user's
+ * own text — the text with the chips removed and the leading whitespace
+ * trimmed, exactly what `composeMessage` keeps as `rest`.
+ *
+ * Returns null when the two shapes disagree (a quote without a chip, a chip the
+ * plugin does not own, a mid-commit read): the caller then sends the quotes
+ * without positions, which only costs the inline ordering.
+ */
+export function spotMapOf(draft: string, chipIds: readonly string[]): Map<string, number> | null {
+  if (chipIds.length === 0) return null
+  if (chipSlots(draft) !== chipIds.length) return null
+  const spots = new Map<string, number>()
+  let chip = 0
+  let at = 0
+  let started = false
+  for (let index = 0; index < draft.length; index += 1) {
+    const char = draft[index]
+    if (char === DRAFT_MARKER) continue
+    if (char === CHIP_PLACEHOLDER) {
+      const id = chipIds[chip]
+      chip += 1
+      if (id !== undefined && !spots.has(id)) spots.set(id, at)
+      continue
+    }
+    // Leading whitespace is trimmed off `rest`, so it must not count either.
+    if (!started && /\s/u.test(char ?? '')) continue
+    started = true
+    at += 1
+  }
+  return chip === chipIds.length ? spots : null
+}
+
+/**
+ * Insert one {@link QUOTE_MARK} per offset (ascending, already clamped by the
+ * caller). Inverse of the offsets recorded by {@link composeMessage}.
+ */
+export function withQuoteMarks(text: string, ats: readonly number[]): string {
+  const sorted = [...ats].map((at) => Math.max(0, Math.min(text.length, Math.floor(at))))
+  sorted.sort((left, right) => left - right)
+  let out = ''
+  let cursor = 0
+  for (const at of sorted) {
+    out += text.slice(cursor, at) + QUOTE_MARK
+    cursor = at
+  }
+  return out + text.slice(cursor)
 }
 
 /** Remove the instructional header that precedes the block. */
@@ -140,6 +228,33 @@ export interface ParsedQuote {
   readonly id: string
   readonly text: string
   readonly long?: boolean
+  /** Offset this chip occupied in the message's own text, when it was recorded. */
+  readonly at?: number
+}
+
+/** Read one block payload into quotes; unreadable entries are skipped. */
+function entriesToQuotes(parsed: readonly unknown[]): ParsedQuote[] {
+  const quotes: ParsedQuote[] = []
+  for (const entry of parsed) {
+    if (entry === null || typeof entry !== 'object') continue
+    const body = (entry as { text?: unknown }).text
+    if (typeof body !== 'string') continue
+    const trimmed = body.trim()
+    if (!trimmed) continue
+    const long = (entry as { long?: unknown }).long === true
+    const rawAt = (entry as { at?: unknown }).at
+    const at =
+      typeof rawAt === 'number' && Number.isFinite(rawAt) && rawAt >= 0
+        ? Math.floor(rawAt)
+        : undefined
+    quotes.push({
+      id: newQuoteId(),
+      text: trimmed,
+      ...(long ? { long: true } : {}),
+      ...(at === undefined ? {} : { at }),
+    })
+  }
+  return quotes
 }
 
 export interface QuoteScan {
@@ -158,17 +273,7 @@ export function scanQuotes(text: string): QuoteScan {
   if (parts === null) return { quotes: [], rest: text }
   const rest = joinedRest(parts)
   if (!Array.isArray(parts.parsed)) return { quotes: [], rest }
-  const quotes: ParsedQuote[] = []
-  for (const entry of parts.parsed) {
-    if (entry === null || typeof entry !== 'object') continue
-    const body = (entry as { text?: unknown }).text
-    if (typeof body !== 'string') continue
-    const trimmed = body.trim()
-    if (!trimmed) continue
-    const long = (entry as { long?: unknown }).long === true
-    quotes.push({ id: newQuoteId(), text: trimmed, ...(long ? { long: true } : {}) })
-  }
-  return { quotes, rest }
+  return { quotes: entriesToQuotes(parts.parsed), rest }
 }
 
 export interface ComposedDraftScan {
@@ -187,16 +292,7 @@ export function readComposedDraft(text: string): ComposedDraftScan | null {
   const parts = blockParts(text)
   if (parts === null) return null
   if (!Array.isArray(parts.parsed) || parts.parsed.length === 0) return null
-  const quotes: ParsedQuote[] = []
-  for (const entry of parts.parsed) {
-    if (entry === null || typeof entry !== 'object') continue
-    const body = (entry as { text?: unknown }).text
-    if (typeof body !== 'string') continue
-    const trimmed = body.trim()
-    if (!trimmed) continue
-    const long = (entry as { long?: unknown }).long === true
-    quotes.push({ id: newQuoteId(), text: trimmed, ...(long ? { long: true } : {}) })
-  }
+  const quotes = entriesToQuotes(parts.parsed)
   if (quotes.length === 0) return null
   return { quotes, rest: joinedRest(parts) }
 }

@@ -25,7 +25,7 @@
  * editor rejects the edit, callers fall back to the original chip row.
  */
 
-import { chipLabel, CHIP_PLACEHOLDER, type Quote } from './protocol.ts'
+import { chipLabel, CHIP_PLACEHOLDER, DRAFT_MARKER, QUOTE_MARK, type Quote } from './protocol.ts'
 import { getQuotes, removeQuote, replaceQuotes } from './store.ts'
 
 /** The host's inline reference node type (see the conversation package). */
@@ -73,6 +73,11 @@ interface LexicalNode {
   __ref?: unknown
   /** Raw text content on a plain Lexical TextNode. */
   __text?: unknown
+  /** Raw child list on an ElementNode: `getChildren()` is NOT safe outside `$`. */
+  __children?: unknown
+  /** Lexical ≥0.23 keeps children as a linked list of *node keys*, not nodes. */
+  __first?: string | LexicalNode | null
+  __next?: string | LexicalNode | null
 }
 
 /** A collapsed selection point (Lexical `Point`), duck-typed. */
@@ -109,6 +114,11 @@ function trace(event: string, data?: unknown): void {
   const flag = (globalThis as { __dsqeDebug?: boolean }).__dsqeDebug
   if (flag !== true) return
   console.log(`[dsqe] ${event}`, data ?? '')
+}
+
+/** Private-use marks are invisible in a console dump; show them as `<M>`. */
+function escapeMarks(text: string): string {
+  return text.split(QUOTE_MARK).join('<M>')
 }
 
 /** The slice of `ctx.inputTriggers` this plugin uses. */
@@ -164,6 +174,26 @@ function chipClassOf(editor: LexicalEditorLike): (new (insert: ChipInsert) => Le
   const entry = editor._nodes?.get?.(CHIP_TYPE)
   const klass = entry?.klass
   return typeof klass === 'function' ? (klass as unknown as new (insert: ChipInsert) => LexicalNode) : null
+}
+
+/** The host's plain text node class (`$createTextNode` is not ours to import). */
+function textClassOf(editor: LexicalEditorLike): (new (text: string) => LexicalNode) | null {
+  const entry = editor._nodes?.get?.('text') as
+    | { klass?: new (text: string) => LexicalNode; replace?: new (text: string) => LexicalNode }
+    | undefined
+  // `replace` is what `$applyNodeReplacement` would mint; inserting a raw
+  // `klass` instance makes Lexical reject the node (replacement mismatch).
+  const klass = entry?.replace ?? entry?.klass
+  return typeof klass === 'function' ? klass : null
+}
+
+/** The host's paragraph class, for the empty-editor case below. */
+function paragraphClassOf(editor: LexicalEditorLike): (new () => LexicalNode) | null {
+  const entry = editor._nodes?.get?.('paragraph') as
+    | { klass?: new () => LexicalNode; replace?: new () => LexicalNode }
+    | undefined
+  const klass = entry?.replace ?? entry?.klass
+  return typeof klass === 'function' ? klass : null
 }
 
 /** True when this host can host inline chips at all. */
@@ -268,6 +298,11 @@ function paintActive(): void {
   for (const [quoteId, key] of keyOf) {
     const element = editor.getElementByKey(key)
     if (!element) continue
+    // The clipboard serializer needs to know which quote a chip element is:
+    // the host's DOM only carries `data-composer-chip="<source>"`.
+    if (element.getAttribute('data-composer-chip-ref') !== quoteId) {
+      element.setAttribute('data-composer-chip-ref', quoteId)
+    }
     if (quoteId === activeId) element.setAttribute('data-dsqe-active', '')
     else element.removeAttribute('data-dsqe-active')
   }
@@ -318,6 +353,323 @@ export function chipPresent(id: string): boolean {
   return chipRefsOf(committedOf(editor)).refs.has(id)
 }
 
+/** The node payload for one pending quote (shared by insert and restore). */
+function chipInsertFor(quote: Quote): ChipInsert {
+  return {
+    source: QUOTE_SOURCE,
+    ref: quote.id,
+    label: chipLabel(quote.text, 120),
+    appearance: 'session',
+    clipboardText: CHIP_PLACEHOLDER,
+  }
+}
+
+/**
+ * Children of a node, read without a `$` context.
+ *
+ * `ElementNode.getChildren()` goes through `getLatest()` → `$getNodeByKey`,
+ * which throws Lexical #195 when called from outside an editor update — the
+ * exact place the composer overlay reads the tree. The raw links are the same
+ * data: Lexical ≥0.23 keeps children as a linked list of node *keys*
+ * (`__first` / `__next`, resolved through the state's `_nodeMap`), older builds
+ * keep a `__children` array.
+ */
+function childrenOf(node: LexicalNode, map?: Map<string, LexicalNode>): LexicalNode[] {
+  const array = node.__children
+  if (Array.isArray(array)) return array as LexicalNode[]
+  const first = node.__first
+  if (first !== null && first !== undefined) {
+    if (typeof first === 'object') {
+      const out: LexicalNode[] = []
+      let current: LexicalNode | null = first
+      for (let guard = 0; current && guard < 10_000; guard += 1) {
+        out.push(current)
+        current = typeof current.__next === 'object' ? current.__next : null
+      }
+      return out
+    }
+    if (map !== undefined) {
+      const out: LexicalNode[] = []
+      let key: string | LexicalNode | null = first
+      for (let guard = 0; typeof key === 'string' && guard < 10_000; guard += 1) {
+        const child = map.get(key)
+        if (!child) break
+        out.push(child)
+        key = child.__next ?? null
+      }
+      return out
+    }
+  }
+  try {
+    return typeof node.getChildren === 'function' ? node.getChildren() : []
+  } catch {
+    return []
+  }
+}
+
+/** True when a node is one of the host's reference chips. */
+function isChipNode(node: LexicalNode): boolean {
+  // Instances of this build carry no `getType`; the constructor's static one
+  // does. Fall back to "carries our source", which only a chip can.
+  try {
+    const ctor = (node as { constructor?: { getType?: () => string } }).constructor
+    const type = typeof ctor?.getType === 'function' ? ctor.getType() : undefined
+    if (type !== undefined) return type === CHIP_TYPE
+  } catch {
+    // fall through to the source check
+  }
+  return sourceOf(node) === QUOTE_SOURCE
+}
+
+/**
+ * Quote ids that own a chip right now, **in document order**.
+ *
+ * The composer's clipboard projection carries one U+FFFC per chip in the same
+ * order, so this list is what turns "there are two placeholders" into "the
+ * first one is quote A". `_nodeMap` iteration order is *not* document order
+ * (it is creation order), hence the tree walk.
+ */
+export function chipOrder(): string[] {
+  const editor = attached?.editor ?? editorOf()
+  if (!editor) return []
+  const state = committedOf(editor)
+  const map = state?._nodeMap
+  const root = map?.get?.('root') ?? null
+  if (!map || !root) return []
+  const out: string[] = []
+  const walk = (node: LexicalNode, depth: number): void => {
+    if (depth > 24) return
+    try {
+      if (isChipNode(node)) {
+        if (sourceOf(node) === QUOTE_SOURCE) {
+          const ref = refOf(node)
+          if (typeof ref === 'string' && ref.length > 0) out.push(ref)
+        }
+        return
+      }
+      for (const child of childrenOf(node, map)) walk(child, depth + 1)
+    } catch {
+      // one unreadable node must not hide the rest
+    }
+  }
+  walk(root, 0)
+  trace(
+    'order',
+    JSON.stringify({
+      attachedIsLive: attached?.editor === editorOf(),
+      out: out.length,
+      top: childrenOf(root, map).map((child) => {
+        const ctor = (child as { constructor?: { getType?: () => string; name?: string } }).constructor
+        return {
+          ctor: ctor?.name,
+          ctorType: typeof ctor?.getType === 'function' ? ctor.getType() : null,
+          src: String((child as { __source?: unknown }).__source),
+          kids: childrenOf(child, map).length,
+        }
+      }),
+    }),
+  )
+  return out
+}
+
+/** First QUOTE_MARK left in the document, as (text node, offset). */
+function firstMark(
+  node: LexicalNode,
+  map?: Map<string, LexicalNode>,
+  depth = 0,
+): { node: LexicalNode; offset: number } | null {
+  if (depth > 24) return null
+  const text = typeof node.__text === 'string' ? node.__text : null
+  if (text !== null) {
+    const offset = text.indexOf(QUOTE_MARK)
+    return offset >= 0 ? { node, offset } : null
+  }
+  for (const child of childrenOf(node, map)) {
+    const hit = firstMark(child, map, depth + 1)
+    if (hit !== null) return hit
+  }
+  return null
+}
+
+/** Every text node that still carries marks, with its mark offsets (ascending). */
+function markNodes(
+  node: LexicalNode,
+  map: Map<string, LexicalNode>,
+  out: { node: LexicalNode; offsets: number[] }[] = [],
+  depth = 0,
+): { node: LexicalNode; offsets: number[] }[] {
+  if (depth > 24) return out
+  const text = typeof node.__text === 'string' ? node.__text : null
+  if (text !== null) {
+    if (text.includes(QUOTE_MARK)) {
+      const offsets: number[] = []
+      for (let index = 0; index < text.length; index += 1) {
+        if (text[index] === QUOTE_MARK) offsets.push(index)
+      }
+      out.push({ node, offsets })
+    }
+    return out
+  }
+  for (const child of childrenOf(node, map)) markNodes(child, map, out, depth + 1)
+  return out
+}
+
+/**
+ * Replace the mark character at `offset` with `chip`, keeping the text around
+ * it, and return the node that now holds the remainder (so a second mark in
+ * the same text node can be handled with a valid cursor).
+ */
+function swapMarkForChip(node: LexicalNode, offset: number, chip: LexicalNode | null): LexicalNode | null {
+  if (typeof node.splitText !== 'function') {
+    trace('swap:no-split', escapeMarks(String(node.__text ?? '')))
+    return null
+  }
+  const source = escapeMarks(String(node.__text ?? ''))
+  // `splitText(0)` is not a split (the host returns the node untouched, with no
+  // remainder), so a mark sitting at the head of a text node is cut off from
+  // the other end instead.
+  if (offset === 0) {
+    const parts = typeof node.splitText === 'function' ? node.splitText(1) : []
+    const mark = parts[0] ?? null
+    const rest = parts[1] ?? null
+    if (mark === null || rest === null) {
+      trace('swap:head-failed', { offset, text: source })
+      return null
+    }
+    if (chip !== null) rest.insertBefore?.(chip)
+    mark.remove?.()
+    trace('swap:ok', { offset, chip: chip !== null, mode: 'head', rest: escapeMarks(String(rest.__text ?? '')) })
+    return rest
+  }
+  const [head, tail] = node.splitText(offset)
+  if (!tail) {
+    trace('swap:no-tail', { offset, text: source })
+    return null
+  }
+  const parts = typeof tail.splitText === 'function' ? tail.splitText(1) : []
+  const mark = parts[0] ?? null
+  const rest = parts[1] ?? null
+  if (mark === null) {
+    trace('swap:mark-failed', { offset, text: source })
+    return null
+  }
+  if (chip !== null && head && typeof head.insertAfter === 'function') {
+    head.insertAfter(chip, false)
+  }
+  mark.remove?.()
+  trace('swap:ok', {
+    offset,
+    chip: chip !== null,
+    mode: 'mid',
+    head: escapeMarks(String(head?.__text ?? '')),
+    rest: rest === null ? null : escapeMarks(String(rest.__text ?? '')),
+  })
+  return rest ?? null
+}
+
+/**
+ * Put chips back where {@link QUOTE_MARK} says they were.
+ *
+ * Used by the withdraw refill and by a paste of composed content: the marked
+ * text is written first (the host accepts U+E000), then each mark becomes the
+ * chip of the matching id, in document order.
+ *
+ * @param ids - quote ids, in mark order.
+ * @returns whether any chip was placed.
+ */
+export function materializeQuoteMarks(ids: readonly string[]): boolean {
+  const editor = ensureAttached()
+  if (!editor) return false
+  const Klass = chipClassOf(editor)
+  if (!Klass) return false
+  const quotes = new Map(getQuotes().map((quote) => [quote.id, quote]))
+  let placed = 0
+  let dropped = 0
+  let seen = 0
+  try {
+    editor.update?.(
+      () => {
+        const state = stateOf(editor)
+        const map = state?._nodeMap
+        const root = map?.get?.('root') ?? null
+        if (!map || !root) return
+        const entries = markNodes(root, map)
+        trace(
+          'marks:nodes',
+          JSON.stringify(
+            entries.map((entry) => ({
+              text: escapeMarks(String(entry.node.__text ?? '')),
+              offsets: entry.offsets,
+            })),
+          ),
+        )
+        for (const entry of entries) {
+          // One node may hold several marks: walk it once with a cursor, so
+          // each offset stays valid after the previous split.
+          let tail: LexicalNode | null = entry.node
+          let base = 0
+          for (const offset of entry.offsets) {
+            if (tail === null) break
+            const id = ids[seen]
+            seen += 1
+            const quote = id === undefined ? undefined : quotes.get(id)
+            tail = swapMarkForChip(
+              tail,
+              offset - base,
+              quote === undefined ? null : new Klass(chipInsertFor(quote)),
+            )
+            if (quote === undefined) dropped += 1
+            else placed += 1
+            base = offset + 1
+          }
+        }
+      },
+      { discrete: true },
+    )
+  } catch (error) {
+    trace('marks:threw', String(error))
+    return false
+  }
+  scan(committedOf(editor))
+  trace('marks:placed', { placed, dropped, seen, present: [...present] })
+  for (const id of ids) {
+    if (present.has(id)) owned.add(id)
+  }
+  return placed > 0
+}
+
+/**
+ * True while marked text is still waiting to become chips (the marked draft
+ * has not landed in the editor yet). The caller must not run the ordinary
+ * "one chip per pending quote" insertion during that window — it would append
+ * duplicates behind the marks.
+ */
+export function hasRestoreMarks(): boolean {
+  const editor = attached?.editor ?? editorOf()
+  if (!editor) return false
+  const map = committedOf(editor)?._nodeMap
+  const root = map?.get?.('root') ?? null
+  return root !== null && map !== undefined && firstMark(root, map) !== null
+}
+
+/**
+ * A paste has already written its marked text straight into the editor and
+ * only needs the marks swapped for chips. The panel consumes this on its next
+ * pass, which keeps insertion in one place (and out of a race with its own
+ * "one chip per pending quote" loop).
+ */
+let queuedRestore: string[] | null = null
+
+export function queueQuoteRestore(ids: readonly string[]): void {
+  queuedRestore = ids.length > 0 ? [...ids] : null
+}
+
+export function takeQueuedQuoteRestore(): string[] | null {
+  const queued = queuedRestore
+  queuedRestore = null
+  return queued
+}
+
 /** Forget cached presence (session switch): the editor content is replaced. */
 export function resetInlineChips(): void {
   present = new Set<string>()
@@ -327,6 +679,7 @@ export function resetInlineChips(): void {
   seenPlaced.clear()
   failures.clear()
   stashed.clear()
+  queuedRestore = null
 }
 
 /** The composer currently shows a chip of ours (ground truth, DOM level). */
@@ -375,13 +728,7 @@ export function insertQuoteChip(quote: Quote): boolean {
     return false
   }
 
-  const insert: ChipInsert = {
-    source: QUOTE_SOURCE,
-    ref: quote.id,
-    label: chipLabel(quote.text, 120),
-    appearance: 'session',
-    clipboardText: CHIP_PLACEHOLDER,
-  }
+  const insert: ChipInsert = chipInsertFor(quote)
 
   let placed = false
   try {
@@ -434,35 +781,77 @@ function placeChip(
       const at = Math.max(0, Math.min(anchor.offset, size))
       if (at === 0) {
         node.insertBefore?.(chip)
-        return finish(chip)
+        return finish(editor, chip)
       }
       const [head] = node.splitText(at)
       if (head && typeof head.insertAfter === 'function') {
         head.insertAfter(chip, false)
-        return finish(chip)
+        return finish(editor, chip)
       }
     }
   } else if (anchor && anchor.type === 'element') {
     const node = map.get(anchor.key)
-    if (node && typeof node.splice === 'function') {
+    const root = map.get('root')
+    if (node && node === root) {
+      // A caret on the root itself (empty composer, or focus parked outside
+      // the text): only blocks may live there, so aim at the block the caret
+      // points at — the chip must start out inside a line.
+      const placed = placeInBlock(editor, chip, root, anchor.offset)
+      if (placed) return finish(editor, chip)
+    } else if (node && typeof node.splice === 'function') {
       node.splice(Math.max(0, anchor.offset), 0, [chip])
-      return finish(chip)
+      return finish(editor, chip)
     }
   }
 
   // No usable caret (focus is in the transcript): append to the last block.
   const root = map.get('root')
-  const blocks = typeof root?.getChildren === 'function' ? root.getChildren() : []
-  const last = blocks.length > 0 ? blocks[blocks.length - 1] : null
-  if (last && typeof last.append === 'function') {
-    last.append(chip)
-    return finish(chip)
-  }
-  if (root && typeof root.append === 'function') {
-    root.append(chip)
-    return finish(chip)
+  if (root && placeInBlock(editor, chip, root, Number.POSITIVE_INFINITY)) {
+    return finish(editor, chip)
   }
   return false
+}
+
+/**
+ * Insert `chip` inside one of the root's blocks (never straight into the root),
+ * minting a paragraph when the composer has none yet.
+ */
+function placeInBlock(
+  editor: LexicalEditorLike,
+  chip: LexicalNode,
+  root: LexicalNode,
+  offset: number,
+): boolean {
+  let blocks: LexicalNode[] = []
+  try {
+    blocks = typeof root.getChildren === 'function' ? root.getChildren() : []
+  } catch {
+    blocks = []
+  }
+  if (blocks.length === 0) {
+    const ParagraphKlass = paragraphClassOf(editor)
+    if (!ParagraphKlass) return false
+    try {
+      const paragraph = new ParagraphKlass()
+      root.append?.(paragraph)
+      if (typeof paragraph.append !== 'function') return false
+      paragraph.append(chip)
+      return true
+    } catch (error) {
+      trace('place:paragraph-threw', String(error))
+      return false
+    }
+  }
+  const last = blocks[blocks.length - 1]
+  if (offset >= blocks.length) {
+    if (typeof last.append !== 'function') return false
+    last.append(chip)
+    return true
+  }
+  const block = blocks[Math.max(0, offset)]
+  if (typeof block.splice !== 'function') return false
+  block.splice(0, 0, [chip])
+  return true
 }
 
 /**
@@ -473,17 +862,53 @@ function placeChip(
  * the caret landing on an element point is fine — {@link deleteAdjacentChip}
  * handles that case explicitly, which is why Backspace still removes the chip.
  */
-function finish(chip: LexicalNode): boolean {
+function finish(editor: LexicalEditorLike, chip: LexicalNode): boolean {
   try {
     const parent = chip.getParent?.() ?? null
     const index = chip.getIndexWithinParent?.()
+    const name = (parent as { constructor?: { name?: string } } | null)?.constructor?.name
     // Caret *inside the same paragraph*, right after the chip. `selectNext`
     // resolves to a root-level element point, which makes Backspace look at the
     // neighbouring block instead of the chip.
-    if (parent && typeof parent.select === 'function' && typeof index === 'number') {
+    //
+    // The caret has to land in a *text* node: an element point at the end of a
+    // block whose children are all decorators is normalised up to the root, and
+    // the next keystroke then opens a second paragraph (the chip ended up on a
+    // line of its own). A zero-length text node right after the chip gives the
+    // caret somewhere real to sit.
+    const TextKlass = textClassOf(editor)
+    if (parent && typeof parent.select === 'function' && typeof index === 'number' && TextKlass) {
+      let filler: LexicalNode | null = null
+      try {
+        filler = new TextKlass(DRAFT_MARKER)
+      } catch (error) {
+        trace('finish:new-threw', String(error))
+      }
+      if (filler !== null) {
+        try {
+          // `splice` (element-level insert) is what the element-anchor branch
+          // uses as well; `node.insertAfter` rejects a text node here.
+          if (typeof parent.splice === 'function') parent.splice(index + 1, 0, [filler])
+          else chip.insertAfter?.(filler, false)
+        } catch (error) {
+          trace('finish:insert-threw', String(error))
+          filler = null
+        }
+      }
+      if (filler !== null && typeof filler.select === 'function') {
+        try {
+          filler.select(0, 0)
+          trace('finish:parent', { name, index, filler: true })
+          return true
+        } catch (error) {
+          trace('finish:select-threw', String(error))
+        }
+      }
       parent.select(index + 1, index + 1)
+      trace('finish:parent', { name, index, filler: false })
     } else {
       chip.selectNext?.(0, 0)
+      trace('finish:next', { name, index, hasSelect: typeof parent?.select })
     }
   } catch (error) {
     trace('finish:threw', String(error))
@@ -591,6 +1016,67 @@ function deleteAdjacentChip(backward: boolean): boolean {
   return true
 }
 
+/** Chip refs inside a non-collapsed selection, in document order. */
+function chipsInSelection(): string[] {
+  if (typeof window === 'undefined') return []
+  const selection = window.getSelection()
+  if (selection === null || selection.rangeCount === 0 || selection.isCollapsed) return []
+  const range = selection.getRangeAt(0)
+  const refs: string[] = []
+  for (const element of Array.from(
+    document.querySelectorAll(`[data-composer-chip="${QUOTE_SOURCE}"]`),
+  )) {
+    if (!range.intersectsNode(element)) continue
+    const ref = element.getAttribute('data-composer-chip-ref')
+    if (typeof ref === 'string' && ref.length > 0) refs.push(ref)
+  }
+  return refs
+}
+
+/**
+ * Remove chips by ref: Select-all + Backspace / Delete only drops text nodes
+ * in the host's own path, so the chips used to survive in an empty draft.
+ */
+function removeChipsByRef(refs: readonly string[]): number {
+  if (refs.length === 0) return 0
+  const editor = ensureAttached()
+  if (!editor) return 0
+  let removed = 0
+  try {
+    editor.update?.(
+      () => {
+        const map = stateOf(editor)?._nodeMap
+        if (!map) return
+        for (const ref of refs) {
+          const key = keyOf.get(ref)
+          const node = key === undefined ? undefined : map.get(key)
+          if (!node || typeof node.remove !== 'function') continue
+          try {
+            node.remove()
+            removed += 1
+          } catch {
+            // ignore this chip
+          }
+        }
+      },
+      { discrete: true },
+    )
+  } catch (error) {
+    trace('removeChips:threw', String(error))
+    return 0
+  }
+  if (removed === 0) return 0
+  for (const ref of refs) {
+    const quote = getQuotes().find((item) => item.id === ref)
+    if (quote !== undefined) stashed.set(ref, quote)
+    owned.delete(ref)
+    removeQuote(ref)
+  }
+  scan(committedOf(editor))
+  trace('removeChips:removed', refs)
+  return removed
+}
+
 /**
  * Swallow Backspace / Delete when it is aimed at one of our chips.
  *
@@ -603,10 +1089,22 @@ export function watchChipDeletion(): () => void {
     if (event.key !== 'Backspace' && event.key !== 'Delete') return
     if (event.metaKey || event.ctrlKey || event.altKey) return
     const target = event.target
-    const editable = target instanceof HTMLElement && target.isContentEditable
-    trace('key', { key: event.key, editable, inCard: editable || (target instanceof Element && target.closest('[data-composer-card]') !== null) })
     if (!(target instanceof HTMLElement) || !target.isContentEditable) return
     if (target.closest('[data-composer-card]') === null) return
+    // A selection that covers chips deletes them too (select-all), on top of
+    // the host's own text deletion.
+    const selected = chipsInSelection()
+    if (selected.length > 0) {
+      event.preventDefault()
+      event.stopPropagation()
+      try {
+        document.execCommand('delete')
+      } catch {
+        // text deletion is best effort; the chips must still go
+      }
+      removeChipsByRef(selected)
+      return
+    }
     if (!deleteAdjacentChip(event.key === 'Backspace')) return
     event.preventDefault()
     event.stopPropagation()

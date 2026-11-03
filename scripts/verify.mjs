@@ -424,6 +424,73 @@ const {
   )
 }
 
+// ---------------------------------------------------------------- order tests
+{
+  const { CHIP_PLACEHOLDER, QUOTE_MARK, spotMapOf, withQuoteMarks } = protocol
+  // The user's own case: 引用胶囊 + 文本1111 + 长文本胶囊 + 文本222.
+  const draft = `${CHIP_PLACEHOLDER}文本1111${CHIP_PLACEHOLDER}文本222`
+  const spots = spotMapOf(draft, ['qa', 'qb'])
+  check(
+    'order: every chip maps to its offset in the typed text',
+    spots !== null && spots.get('qa') === 0 && spots.get('qb') === 6,
+    JSON.stringify(spots === null ? null : [...spots]),
+  )
+
+  const quotes = [
+    { id: 'qa', text: '引用内容' },
+    { id: 'qb', text: '很长的一段文本', long: true },
+  ]
+  const composed = composeMessage(draft, quotes, spots)
+  const scanned = scanQuotes(composed)
+  check(
+    'order: the wire payload carries each offset',
+    scanned.quotes.length === 2 &&
+      scanned.quotes[0].at === 0 &&
+      scanned.quotes[1].at === 6 &&
+      scanned.rest === '文本1111文本222',
+    JSON.stringify({ quotes: scanned.quotes, rest: scanned.rest }),
+  )
+  const restored = readComposedDraft(composed)
+  check(
+    'order: withdraw refill recovers the same offsets',
+    restored !== null && restored.quotes[0].at === 0 && restored.quotes[1].at === 6,
+    JSON.stringify(restored === null ? null : restored.quotes),
+  )
+
+  check(
+    'order: marks land at the recorded offsets',
+    withQuoteMarks('文本1111文本222', [0, 6]) ===
+      `${QUOTE_MARK}文本1111${QUOTE_MARK}文本222`,
+    JSON.stringify(withQuoteMarks('文本1111文本222', [0, 6])),
+  )
+  check(
+    'order: marks are clamped to the text and survive a reversed input',
+    withQuoteMarks('abc', [9, 1]) === `a${QUOTE_MARK}bc${QUOTE_MARK}`,
+    JSON.stringify(withQuoteMarks('abc', [9, 1])),
+  )
+  check(
+    'order: leading whitespace never shifts an offset (it is trimmed)',
+    JSON.stringify([...(spotMapOf(`\n\n  ${CHIP_PLACEHOLDER}正文`, ['qc']) ?? new Map())]) ===
+      JSON.stringify([['qc', 0]]),
+  )
+  check(
+    'order: a chip count mismatch gives up on positions instead of guessing',
+    spotMapOf(draft, ['qa']) === null && spotMapOf(draft, ['qa', 'qb', 'qc']) === null,
+  )
+  check(
+    'order: no chip means no offsets (row mode keeps the old layout)',
+    spotMapOf('纯文本', []) === null,
+  )
+  check(
+    'order: a stray restore mark never reaches the model',
+    !composeMessage(`a${QUOTE_MARK}b`, [{ id: 'qd', text: '引用' }]).includes(QUOTE_MARK),
+  )
+  check(
+    'order: messages without offsets still parse (backward compatible)',
+    scanQuotes(composeMessage('正文', [{ id: 'qe', text: '旧引用' }])).quotes[0].at === undefined,
+  )
+}
+
 // ---------------------------------------------------------------- locate tests
 {
   const locate = await compileModule('src/client/locate.ts', join(tmp, 'locate.cjs'))
@@ -775,6 +842,28 @@ check(
 check(
   'inline mode never writes the U+200B marker (setDraft rebuilds the paragraphs)',
   clientCode.includes('mode !== "row"') || clientCode.includes("mode !== 'row'"),
+)
+check(
+  'a chip is always placed inside a block, never straight into the root',
+  // root.splice rejects a text node, and a root-level chip caret makes the next
+  // keystroke open a second paragraph (the chip ended up on its own line).
+  clientCode.includes('placeInBlock') && !clientCode.includes('root.append(chip)'),
+)
+check(
+  'a fresh chip leaves the caret in a real text node (U+200B filler)',
+  clientCode.includes('new TextKlass(DRAFT_MARKER)'),
+)
+check(
+  'mark restore handles a mark at offset 0 (splitText(0) is not a split)',
+  clientCode.includes('swap:head-failed'),
+)
+check(
+  'select-all + Backspace also drops the chips in the selection',
+  clientCode.includes('chipsInSelection') && clientCode.includes('removeChipsByRef'),
+)
+check(
+  'copy writes the v2 clipboard payload with each chip offset',
+  clientCode.includes('dsh-quote-data') && clientCode.includes('v: 2'),
 )
 
 // ---------------------------------------------------------------- withdraw engine

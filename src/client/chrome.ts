@@ -236,8 +236,13 @@ async function copyMessage(): Promise<void> {
   const scan = scanQuotes(entry.raw)
   // Quotes ride along in the HTML flavor as an invisible comment: pasting
   // into our composer restores them as pending chips (see paste.ts), while
-  // every other target just sees the display text.
-  const payload = scan.quotes.map((quote) => ({ text: quote.text }))
+  // every other target just sees the display text. `at` keeps the order the
+  // message showed the chips in.
+  const payload = scan.quotes.map((quote) => ({
+    text: quote.text,
+    ...(quote.long ? { long: true } : {}),
+    ...(quote.at === undefined ? {} : { at: quote.at }),
+  }))
   const marker =
     payload.length > 0
       ? `<!--dsh-quote-data:${JSON.stringify(payload)
@@ -292,6 +297,8 @@ async function withdrawRow(row: HTMLElement): Promise<void> {
   // the same value as the flow key, but read it explicitly to stay aligned.
   const anchorKey = row.getAttribute('data-chat-anchor-key') ?? flowKey
   const withdraw = runtime.withdraw
+  const dbg = (globalThis as { __dsqeDebug?: boolean }).__dsqeDebug === true
+  if (dbg) console.log('[dsqe] withdraw:start', { flowKey, anchorKey, hasWithdraw: withdraw !== null })
   hideActionsImmediate()
   if (withdraw === null) {
     showUndoHint(t('undo.failed'))
@@ -300,9 +307,11 @@ async function withdrawRow(row: HTMLElement): Promise<void> {
   let outcome: Awaited<ReturnType<typeof withdraw>>
   try {
     outcome = await withdraw(flowKey, anchorKey)
-  } catch {
+  } catch (error) {
+    if (dbg) console.log('[dsqe] withdraw:threw', String(error))
     outcome = { ok: false, refilled: false, reason: 'threw' }
   }
+  if (dbg) console.log('[dsqe] withdraw:done', outcome)
   if (!outcome.ok) showUndoHint(t('undo.failed'))
 }
 

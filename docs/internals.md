@@ -20,6 +20,7 @@ src/client/selection-toolbar.tsx # 划词工具条（shell.overlay）
 src/client/composer-panel.tsx    # 输入框行内胶囊编排（光标处插节点）+ 顶部 chip 行兜底 + 标记 + 发送折叠 + 撤回还原
 src/client/chip.tsx              # React 引用 chip（顶部行/气泡内，悬停全文预览，长文本胶囊图标）
 src/client/inline-chips.ts       # 行内胶囊：宿主 reference-chip 节点的插入 / 存在性订阅 / source 注册（0.7.0+）
+src/client/chip-clipboard.ts     # 输入框内复制/剪切：胶囊按 label 内联进剪贴板 + v2 位置载荷（0.7.2+）
 src/client/detail.tsx            # 右侧详情（消息胶囊点击打开，模块级 store + 本地抽屉兜底）
 src/client/locate.ts             # 「定位原文」：拍平索引 + 反查 Range + 滚动 + 标记状态（无 React）
 src/client/source-mark.tsx        # 下划线层（shell.overlay order 90）：Range 的 client rects 叠 fixed 线
@@ -98,7 +99,8 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 待发引用与粘贴生成的长文本胶囊**直接坐在编辑器正文里**（插在光标处、跟着文字排版流动），不再钉在输入框顶部一行。做法是**复用宿主自己的行内引用节点**，不自己造节点：
 
 - 宿主 composer 是 Lexical 编辑器，`[data-lexical-editor="true"]` 根元素上有 `__lexicalEditor`；它内建的 `reference-chip`（`DecoratorNode`，`isInline() === true`、`isKeyboardSelectable() === false`）就是 `@` 文件/会话引用的那枚胶囊。插件用 `editor._nodes.get('reference-chip').klass` 拿构造器，`new` 一个实例以 `source: 'dsh-quote'` 区分来源，宿主自己的 React 渲染原样拿来用
-- 插入在 `editor.update(fn, { discrete: true })` 里做：`_selection.anchor.type === 'text'` → `splitText(offset)` 后在 head 上 `insertAfter(chip)`（offset 0 用 `insertBefore`）；`'element'` → `parent.splice(offset, 0, [chip])`；**没有可用光标**（焦点还在对话区）→ 落到最后一个 block 的 `append`。插完把光标停在**同一段落内**紧挨胶囊的位置（`parent.select(index + 1, index + 1)`）——用 `chip.selectNext()` 会得到 root 级 element 点，Backspace 会去看相邻的 block 而不是胶囊
+- 插入在 `editor.update(fn, { discrete: true })` 里做：`_selection.anchor.type === 'text'` → `splitText(offset)` 后在 head 上 `insertAfter(chip)`（offset 0 用 `insertBefore`）；`'element'` → 宿主段落上 `splice(offset, 0, [chip])`，**若这个 element 点是 root 本身**（空输入框就是 `{key:'root', offset:0}`）则改走 `placeInBlock()`：落到光标指向的 block 的**开头**、或最后一个 block 的**末尾**，一个 block 都没有时先用 `_nodes.get('paragraph')` 造一个段落再放——把胶囊直接 `root.append(chip)` 会让 root 出现非法子节点，且光标停在 root 级 element 点上，**下一个按键会另起一段，胶囊被单独挤成一行**；**没有可用光标**（焦点还在对话区）→ 同样走 `placeInBlock(…, ∞)` = 最后一个 block 的 `append`
+- 插完把光标停在**同一段落内**紧挨胶囊的位置，而且必须落在**文本节点**里：`parent.select(index + 1, index + 1)` 这种 element 点会被 Lexical 归一化提到 root（叶子 block 里全是 decorator 时没有可转换的文本点），于是打字又另起一段。做法是 `parent.splice(index + 1, 0, [filler])` 插一个**内容为 U+200B 的空文本节点**再 `filler.select(0, 0)`——空串会被 Lexical 拒（#99/#282），U+200B 可以；它不显示、`composeMessage` 里 `stripDraftMarker` 会把它去掉，不会漏进消息
 - **读节点属性必须绕开 `$` API**：`ReferenceChipNode.getSource()/getReference()` 内部走 `$getNodeByKey`，在没有活动 editor state 的地方调用会抛 Lexical **#195**。而 update listener 恰好就是这种地方——早期版本因此在 update 提交后抛错，调用方误判「插入失败」，于是反复重插（一次引用插出上百枚胶囊、顶部行也不消失）。现在只读原始字段 `__source` / `__ref`（getter 仅作新宿主的兜底，且包 try/catch），并且每个节点单独 try/catch：**一个坏节点不能打断整次扫描**
 - **插入是幂等的**：模块级 `owned` 记住已插过的 id，`present` / 已提交状态里已有该 id 就直接算成功；同一 id 连续失败两次就放弃并退回顶部行。面板（overlay）重挂载会重置 React state，幂等守卫让「重挂载 → 再插一次」不再可能
 - **删除**：`watchChipDeletion()` 在 document 捕获阶段截 `Backspace` / `Delete`，只处理「光标紧挨我们自己的胶囊、中间没有可删字符」的情况（文本点看前后兄弟，element 点看相邻子节点、必要时下钻到 block 的首/尾叶子），`target.remove()` 后把光标重锚到父节点，并**立刻 `removeQuote`**——否则面板看到「store 有、编辑器没有」会马上补插回来。带 `⌘/Ctrl/Alt/Shift` 的组合键一律放行
@@ -109,12 +111,21 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 - **降级到顶部行**：`inlineChipsSupported()`（编辑器在 + 节点类型在）不成立、或插入被编辑器拒绝，面板把 `mode` 切到 `'row'`，退回 0.6.0 的顶部 chip 行（`--dsqe-pad` 预留高度只在 row 模式生效）；切换会话 `resetInlineChips()` 清掉缓存的存在性、`owned` 与失败计数
 - 调试开关：控制台执行 `globalThis.__dsqeDebug = true` 可看到 `[dsqe]` 前缀的 scan / insert / delete 轨迹
 
+**14. 顺序一致（0.7.2+，位置协议 + 回填标记 + 剪贴板 v2）**
+
+「引用 + 文本1111 + 长文本 + 文本222」这样交错输入，要求**发送后的气泡**和**撤回回填后的输入框**都保持同样的顺序。三条路径各有一套落位机制：
+
+- **发送**：`chipOrder()` 按**文档顺序**给出胶囊的 quoteId 列表——`_nodeMap` 的遍历顺序是创建顺序，不能用；`ElementNode` 的子节点在这个 Lexical 版本里是**键的链表**（`__first` / `__next` 都是字符串 key，必须经 `_nodeMap.get(key)` 解析成节点，也没有 `__children` 数组）。`spotMapOf(draft, order)` 把「draft 里第 N 个 U+FFFC」换算成「去掉占位符后正文里的字符偏移」，`composeMessage(draft, quotes, spots)` 把它写成 payload 的 `at`；气泡侧 `transcript.bubbleContent()` 按 `at` 把胶囊与文字**交错**渲染（老消息无 `at` 保持「胶囊在前」的旧排版）
+- **撤回回填**：宿主 `setDraft` 会洗掉 `[\uE100-\uE11D\uFFFC]`，所以占位符换成私用区 **U+E000**（`QUOTE_MARK`）：`withQuoteMarks(text, ats)` 写出带标记的草稿，标记落地后 `materializeQuoteMarks(ids)` 一趟遍历把所有标记按顺序换成 chip。**`splitText(0)` 不是切分**（返回原节点、没有尾段），落在文本节点开头的标记必须走「从另一头切」的分支，否则第一枚胶囊永远落不下去；同一个文本节点里的多枚标记要用游标逐个处理，切完一次后面的偏移就失效了
+- **复制 / 粘贴**：`chip-clipboard.ts` 只在「选区里确实有我们的胶囊」时接管 `copy` / `cut`，写 `text/plain`（每枚胶囊内联成 label）+ `text/html`（`<!--dsh-quote-data:{"v":2,"text":…,"quotes":[{text,long?,at?}]}-->`）；块边界最多记一次换行（`pendingBreak = Math.max(pendingBreak, 1)`），不会出现 `\n\n\n`。`paste.ts` 两种载荷都认（v2 / 「复制」消息时的裸数组），带 `at` 时 `addQuote` → `queueQuoteRestore(ids)` → `insertPlain(withQuoteMarks(...))`，由面板的插入 effect 消费队列，避免与「一枚引用插一枚胶囊」的循环抢同一次提交
+- **全选删除**：宿主自己的删除只删文本节点，胶囊会留在空草稿里。`watchChipDeletion()` 先在 DOM 上找「与选区相交的胶囊」（`data-composer-chip-ref`），命中就 `preventDefault` + `execCommand('delete')` 删文本 + `removeChipsByRef()`（update 里 `node.remove()`，随后 `stash` / `owned.delete` / `removeQuote` / `scan`），引用不会残留
+
 ## 依赖的产品内部约定（升级 dsh 后复核）
 
 - `[data-composer-card]` + 主发送按钮为卡片内最后一个 `button`（停止按钮渲染 `svg rect`）；
 - 用户消息悬停操作行根元素带 `data-clock="start"`（助手行是 `end`；CSS module 类名会被哈希，属性是稳定钩子）；
 - `[data-lexical-editor="true"]`、`[data-chat-flow-key]`、`[data-conversation-scroll]`、`[data-submission-echo]` / `[data-queue-dock]`；
-- 行内胶囊：根元素上的 `__lexicalEditor`（`update` / `_nodes` / `_nodeMap` / `_selection` / `registerUpdateListener` / `getElementByKey`）、节点类型 `reference-chip`（构造参数 `{source, ref, label, appearance, clipboardText}`、`getSource()` / `getReference()`）、chip 在剪贴板投影里占 U+FFFC、占位符正则 `/[\\uE100-\\uE11D\\uFFFC]/gu`；
+- 行内胶囊：根元素上的 `__lexicalEditor`（`update` / `_nodes` / `_nodeMap` / `_selection` / `registerUpdateListener` / `getElementByKey`）、节点类型 `reference-chip`（构造参数 `{source, ref, label, appearance, clipboardText}`、`getSource()` / `getReference()`）、chip 在剪贴板投影里占 U+FFFC、占位符正则 `/[\uE100-\uE11D\uFFFC]/gu`；另外：`_nodes.get('text')` / `_nodes.get('paragraph')` 的 `klass`（可以直接 `new`，但空文本节点会被拒）、root 只接受 block 子节点（`rootNode.splice` 收到文本节点即 #282）；
 - `ctx.get('inputTriggers').registerSource({ trigger, name, codec: { clipboardText, serialize }, openReference })`：未注册 source 的胶囊活到提交会让整条消息 reject；
 - 槽位 `shell.overlay` / `conversation.input.overlay`（props 带 `useInput`、`inputActions.setDraft`）/ `conversation.chat.node`（user/steering）；
 - `ctx.locale.register/bind`；`ctx.slots.inject/register/entries`；
@@ -140,3 +151,7 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 | 引用还是显示在输入框顶部一行（不是行内） | 宿主是否还注册 `reference-chip` 节点（`inlineChipsSupported()`）；插入后 `present` 里有没有该 id——任一失败即 `mode='row'` 兜底，看控制台无异常属预期降级 |
 | 行内胶囊删掉了但引用还在 / 反过来 | `registerUpdateListener` 是否绑上（`ensureAttached` 只在 `insertQuoteChip` 时触发）；`seenRef` 记过的 id 才会被删，切换会话后 `resetInlineChips()` 会清空 |
 | 发送出去多出「￼」字符 | `composeMessage` 是否还带 `stripChipPlaceholders`（U+FFFC 来自 chip 的 `getTextContent`） |
+| 发送后胶囊全堆在正文最前面 | payload 里有没有 `at`：`chipOrder()` 是否为空（`__first` 是键的链表，必须经 `_nodeMap` 解析）；气泡是否走 `bubbleContent` 而不是老排版 |
+| 撤回回填后顺序乱 / 第二枚胶囊没回来 | 看 `marks:nodes` 的 offsets 是否覆盖每枚标记；文本节点开头的标记（offset 0）是否走到 head 分支（`swap:head-failed` 说明 `splitText(0)` 被当成了切分） |
+| 输入框里全选复制不到胶囊 | `chip-clipboard.ts` 有没有接管（剪贴板 HTML 里应有 `"v":2`）；胶囊 DOM 上有没有 `data-composer-chip-ref`（`paintActive()` 打的） |
+| 插入胶囊后打的字跑到下一行 | 胶囊是否被直接塞进 root（应走 `placeInBlock`）；光标有没有 U+200B 文本节点落脚 |

@@ -19,6 +19,7 @@ import { runtime } from './runtime.ts'
 import { watchComposerResize } from './composer-resize.ts'
 import { watchQuotePaste } from './paste.ts'
 import { registerQuoteSource, watchChipDeletion } from './inline-chips.ts'
+import { watchChipClipboard } from './chip-clipboard.ts'
 
 /**
  * Browser half of dsh-plugin-select-quote-with-edit — the two features in one
@@ -67,6 +68,11 @@ export function apply(ctx: ClientContext): void {
   // Backspace / Delete aimed at one of our chips removes it whole. Lexical only
   // does that for a text-node caret; on an element point it splits the block.
   ctx.effect(() => watchChipDeletion(), 'select-quote-with-edit: chip deletion')
+
+  // Select-all + copy in the composer must carry the chips too: the host's own
+  // projection writes the invisible U+FFFC placeholder, so the selection used
+  // to copy the typed text only.
+  ctx.effect(() => watchChipClipboard(), 'select-quote-with-edit: chip clipboard')
 
   // Root: always-mounted selection toolbar. Root-scoped so transcript
   // selections are observed no matter which session or history view is up.

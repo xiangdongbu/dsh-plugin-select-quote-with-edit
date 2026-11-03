@@ -15,7 +15,7 @@
 
 import React, { useState } from 'react'
 import { t } from './i18n.ts'
-import { CheckIcon, ClipIcon, CopyIcon, QuoteIcon } from './icons.tsx'
+import { CheckIcon, CopyIcon } from './icons.tsx'
 import { copyText } from './dom.ts'
 import { ensureStyles } from './styles.ts'
 import { runtime } from './runtime.ts'
@@ -106,8 +106,8 @@ function displayJson(text: string): string {
   }
 }
 
-function JsonBody({ text }: { text: string }): React.ReactNode {
-  const lines = tokenizeJson(displayJson(text))
+/** One line of the code view: token runs, or a single run of plain text. */
+function LineBody({ lines }: { lines: readonly (readonly Token[])[] }): React.ReactNode {
   return (
     <div className="dsqe-sideBody dsqe-sideJson" role="code">
       {lines.map((tokens, index) => (
@@ -130,12 +130,21 @@ function JsonBody({ text }: { text: string }): React.ReactNode {
   )
 }
 
+/** Plain text as lines (the same numbered body the JSON view uses). */
+function textLines(text: string): Token[][] {
+  return text.split('\n').map((line) => [{ text: line, cls: '' }])
+}
+
 // ---------------------------------------------------------------- tab body
 
-function DetailBody({ text, long }: { text: string; long: boolean }): React.ReactNode {
+/**
+ * The tab body, dressed as the host's own file preview: no plugin chrome of
+ * its own (the sidebar draws the title strip and the close control), just a
+ * numbered, monospace body — with token colors when the capsule is JSON.
+ */
+function DetailBody({ text }: { text: string; long: boolean }): React.ReactNode {
   ensureStyles()
   const [copied, setCopied] = useState(false)
-  const Icon = long ? ClipIcon : QuoteIcon
   const onCopy = (): void => {
     void copyText(text).then((ok) => {
       if (!ok) return
@@ -143,26 +152,19 @@ function DetailBody({ text, long }: { text: string; long: boolean }): React.Reac
       window.setTimeout(() => setCopied(false), 1500)
     })
   }
+  const json = looksLikeJson(text)
   return (
     <div className="dsqe-sideWrap">
-      <header className="dsqe-drawerHead">
-        <span className="dsqe-drawerIcon">
-          <Icon />
-        </span>
-        <span className="dsqe-drawerTitle">
-          {long ? t('detail.titleLong') : t('detail.title')}
-        </span>
-        <button
-          type="button"
-          className="dsqe-drawerClose"
-          aria-label={copied ? t('detail.copied') : t('detail.copy')}
-          title={copied ? t('detail.copied') : t('detail.copy')}
-          onClick={onCopy}
-        >
-          {copied ? <CheckIcon /> : <CopyIcon />}
-        </button>
-      </header>
-      {looksLikeJson(text) ? <JsonBody text={text} /> : <div className="dsqe-sideBody">{text}</div>}
+      <button
+        type="button"
+        className="dsqe-sideCopy"
+        aria-label={copied ? t('detail.copied') : t('detail.copy')}
+        title={copied ? t('detail.copied') : t('detail.copy')}
+        onClick={onCopy}
+      >
+        {copied ? <CheckIcon /> : <CopyIcon />}
+      </button>
+      {json ? <LineBody lines={tokenizeJson(displayJson(text))} /> : <LineBody lines={textLines(text)} />}
     </div>
   )
 }
