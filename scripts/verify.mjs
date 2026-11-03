@@ -797,8 +797,23 @@ check(
   'JSON capsule bodies get the dedicated JSON view (detect + pretty print + line numbers)',
   clientCode.includes('looksLikeJson') &&
     clientCode.includes('displayJson') &&
-    clientCode.includes('dsqe-sideJson') &&
-    clientCode.includes('dsqe-jsonLineNo'),
+    clientCode.includes('dsqe-code') &&
+    clientCode.includes('dsqe-codeNo'),
+)
+check(
+  'detail pane mirrors the native review tab (header + toolbar + sticky file card)',
+  clientCode.includes('dsqe-paneHead') &&
+    clientCode.includes('dsqe-paneTools') &&
+    clientCode.includes('dsqe-fileCard') &&
+    clientCode.includes('dsqe-fileChev') &&
+    clientCode.includes('data-collapsed'),
+)
+check(
+  'the inline editor interleaves chips with the text by their recorded offset',
+  clientCode.includes('fillEditBody') &&
+    clientCode.includes('readEditBody') &&
+    clientCode.includes('EDIT_CHIP_ATTR') &&
+    clientCode.includes('contentEditable = "false"'),
 )
 check(
   'composer grip resizes the editor (drag + clamp + persistence + dblclick reset)',

@@ -40,6 +40,13 @@ body {
   --dsqe-json-lit: #8250df;
   --dsqe-src-line: rgba(37, 99, 235, 0.85);
   --dsqe-src-bg: rgba(37, 99, 235, 0.06);
+  /* 侧边栏详情标签页（照原生审查面板：面板面 / 凹陷画布 / 分隔线）。
+     The host exposes the same colour for both layer tokens, so the recessed
+     canvas is mixed from the label colour exactly like dsh-file-review does —
+     a hair of ink over the surface, flipping with the theme by itself. */
+  --dsqe-pane-bg: var(--dsw-alias-bg-layer-1, #ffffff);
+  --dsqe-pane-canvas: color-mix(in oklab, var(--dsqe-label) 4%, var(--dsqe-pane-bg));
+  --dsqe-pane-line: var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.10));
 }
 body[data-ds-dark-theme] {
   --dsqe-label: #f0f0f2;
@@ -61,6 +68,9 @@ body[data-ds-dark-theme] {
   --dsqe-json-lit: #d2a8ff;
   --dsqe-src-line: rgba(138, 180, 255, 0.9);
   --dsqe-src-bg: rgba(138, 180, 255, 0.08);
+  --dsqe-pane-bg: var(--dsw-alias-bg-layer-1, #232427);
+  --dsqe-pane-canvas: color-mix(in oklab, var(--dsqe-label) 5%, var(--dsqe-pane-bg));
+  --dsqe-pane-line: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.10));
 }
 
 /* ---------- 消息行标记（悬停 chrome / 编辑器的定位上下文） ---------- */
@@ -357,90 +367,214 @@ body[data-ds-dark-theme] {
   user-select: text;
 }
 
-/* ---------- 原生侧边栏里的胶囊详情标签页（sidebar-tab.tsx） ---------- */
-.dsqe-sideWrap {
-  position: relative;
+/* ---------- 原生侧边栏里的胶囊详情标签页（sidebar-tab.tsx） ----------
+   结构照搬 dsh-file-review 的审查面板：顶部标题条 + 工具条，下面一块带
+   sticky 名称行的卡片，正文是行号 + 等宽的代码区。 */
+.dsqe-pane {
   display: flex;
   flex-direction: column;
+  width: 100%;
   height: 100%;
   min-height: 0;
+  background: var(--dsqe-pane-bg);
+  color: var(--dsqe-label);
   font-family: inherit;
   box-sizing: border-box;
 }
-/* The host draws the tab strip (title + close); this is the only control the
-   body adds — a copy affordance floating in the corner, like a preview's. */
-.dsqe-sideCopy {
-  position: absolute;
-  top: 8px;
-  right: 10px;
-  z-index: 1;
-  display: inline-flex;
+.dsqe-paneHead {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 0;
-  border-radius: 7px;
+  gap: 10px 14px;
+  min-height: 64px;
+  padding: 12px 14px 12px 18px;
+  border-bottom: 1px solid var(--dsqe-pane-line);
+}
+.dsqe-paneHeading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.dsqe-paneTile {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
   background: var(--dsqe-chip-bg);
   color: var(--dsqe-label-2);
-  cursor: pointer;
-  opacity: 0.85;
 }
-.dsqe-sideCopy:hover {
-  opacity: 1;
-  background: var(--dsqe-border);
+.dsqe-paneTile svg { width: 17px; height: 17px; }
+.dsqe-paneTitle {
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 22px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dsqe-panePill {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--dsqe-pane-canvas);
+  box-shadow: inset 0 0 0 1px var(--dsqe-pane-line);
+  color: var(--dsqe-label-2);
+  font-size: 12px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.dsqe-paneTools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 11px;
+  background: var(--dsqe-pane-canvas);
+  box-shadow: inset 0 0 0 1px var(--dsqe-pane-line);
+}
+.dsqe-toolBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsqe-label-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.12s, color 0.12s, box-shadow 0.12s;
+}
+.dsqe-toolBtn:hover { background: var(--dsqe-pane-bg); color: var(--dsqe-label); }
+.dsqe-toolBtn[data-on='true'] { color: var(--dsqe-label); }
+.dsqe-toolBtn svg { width: 14px; height: 14px; flex: none; }
+.dsqe-paneBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 12px 12px 20px;
+  background: var(--dsqe-pane-canvas);
+}
+.dsqe-fileCard {
+  border-radius: 12px;
+  background: var(--dsqe-pane-bg);
+  box-shadow: 0 0 0 1px var(--dsqe-pane-line), 0 1px 2px rgba(0, 0, 0, 0.04),
+    0 4px 14px -6px rgba(0, 0, 0, 0.10);
+  overflow: clip;
+}
+.dsqe-fileHead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 12px 0 6px;
+  border-bottom: 1px solid var(--dsqe-pane-line);
+  background: var(--dsqe-pane-bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.dsqe-fileCard[data-collapsed='true'] .dsqe-fileHead { border-bottom-color: transparent; }
+.dsqe-fileChev {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsqe-label-2);
+  cursor: pointer;
+}
+.dsqe-fileChev:hover { background: var(--dsqe-chip-bg); color: var(--dsqe-label); }
+.dsqe-fileChev svg { width: 14px; height: 14px; transition: transform 0.14s ease; }
+.dsqe-fileChev[data-open='false'] svg { transform: rotate(-90deg); }
+.dsqe-fileIcon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: var(--dsqe-label-2);
+}
+.dsqe-fileIcon svg { width: 15px; height: 15px; }
+.dsqe-fileName {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--dsqe-label);
 }
-.dsqe-sideCopy svg { width: 14px; height: 14px; }
+.dsqe-fileMeta {
+  flex: none;
+  color: var(--dsqe-label-2);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  opacity: 0.85;
+}
+.dsqe-fileSpacer { flex: 1; }
+/* 代码区：行号 gutter 横向滚动时固定（与原生审查面板一致） */
+.dsqe-code {
+  padding: 8px 0 14px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--dsqe-quote-text);
+  user-select: text;
+}
+.dsqe-codeLine { display: flex; min-width: fit-content; }
+.dsqe-codeLine:hover { background: var(--dsqe-pane-canvas); }
+.dsqe-codeNo {
+  position: sticky;
+  left: 0;
+  flex: none;
+  width: 46px;
+  padding-right: 12px;
+  text-align: right;
+  background: var(--dsqe-pane-bg);
+  color: var(--dsqe-label-2);
+  opacity: 0.6;
+  user-select: none;
+}
+.dsqe-codeLine:hover .dsqe-codeNo { background: var(--dsqe-pane-canvas); }
+.dsqe-codeText {
+  flex: 1;
+  padding-right: 16px;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+.dsqe-code[data-wrap='true'] .dsqe-codeText {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dsqe-jsonKey { color: var(--dsqe-json-key); }
+.dsqe-jsonStr { color: var(--dsqe-json-str); }
+.dsqe-jsonNum { color: var(--dsqe-json-num); }
+.dsqe-jsonLit { color: var(--dsqe-json-lit); }
 .dsqe-sideEmpty {
   padding: 32px 16px;
   text-align: center;
   font-size: 13px;
   color: var(--dsqe-label-2);
 }
-.dsqe-sideBody {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding: 16px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 13px;
-  line-height: 21px;
-  color: var(--dsqe-quote-text);
-  user-select: text;
-}
-/* JSON 视图：行号 + 语法配色（紧凑 JSON 自动格式化），参考原生审查面板 */
-.dsqe-sideJson {
-  padding: 12px 0 24px;
-  white-space: pre;
-  overflow-wrap: normal;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  line-height: 20px;
-}
-.dsqe-jsonLine { display: flex; }
-.dsqe-jsonLine:hover { background: var(--dsqe-chip-bg); }
-.dsqe-jsonLineNo {
-  flex: none;
-  width: 46px;
-  padding-right: 12px;
-  text-align: right;
-  color: var(--dsqe-label-2);
-  opacity: 0.65;
-  user-select: none;
-}
-.dsqe-jsonCode {
-  flex: 1;
-  min-width: 0;
-  padding-right: 16px;
-}
-.dsqe-jsonKey { color: var(--dsqe-json-key); }
-.dsqe-jsonStr { color: var(--dsqe-json-str); }
-.dsqe-jsonNum { color: var(--dsqe-json-num); }
-.dsqe-jsonLit { color: var(--dsqe-json-lit); }
 
 /* ---------- 输入框手动调高（composer-resize.ts） ----------
    卡片顶边中央一枚 grip，上拖变高（输入框贴窗口底边）、双击复原；
@@ -607,13 +741,6 @@ body[data-dsqe-resizing='true'] {
   gap: 12px;
   animation: dsqe-rise-in 0.12s ease-out;
 }
-.dsqe_editBody {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
 /* 编辑卡专用 chip：× 替换引用图标占位，胶囊宽度不变 */
 .dsqe-echip {
   display: inline-flex;
@@ -629,6 +756,11 @@ body[data-dsqe-resizing='true'] {
   font-size: 12px;
   line-height: 17px;
   flex: none;
+  /* Sits in the sentence, not on its own row — and stays put while the text
+     around it is edited. */
+  vertical-align: middle;
+  margin: 0 1px;
+  user-select: none;
 }
 body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0.14); }
 .dsqe-echipDel,
@@ -657,13 +789,14 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
 .dsqe-echipDel svg { width: 13px; height: 13px; }
 .dsqe-echipIcon svg { width: 13px; height: 13px; opacity: 0.9; }
 .dsqe_editText {
-  flex: 1 1 140px;
+  /* The whole editable card body: text *and* chips, inline. */
+  flex: 0 1 auto;
   min-width: 0;
   font-size: 14px;
   line-height: 22px;
   color: var(--dsqe-label);
   outline: none;
-  min-height: 22px;
+  min-height: 44px;
   max-height: 40vh;
   overflow-y: auto;
   white-space: pre-wrap;

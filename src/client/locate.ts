@@ -22,7 +22,7 @@ const SKIP_SELECTOR = [
   '.dsqe-chip',
   '.dsqe-tipWrap',
   '.dsqe-drawer',
-  '.dsqe-sideWrap',
+  '.dsqe-pane',
   '.dsqe_editor',
   'script',
   'style',

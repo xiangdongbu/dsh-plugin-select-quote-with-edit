@@ -42,9 +42,20 @@ let lastPointer = { x: -1, y: -1 }
 let editingRow: HTMLElement | null = null
 let editorEl: HTMLElement | null = null
 /** Working quote set of the open editor (chips can be removed while editing). */
-let editingQuotes: Quote[] = []
+let editingQuotes: EditQuote[] = []
 let editorSendBtn: HTMLButtonElement | null = null
 let editorTextEl: HTMLElement | null = null
+
+/** Tag on every chip inside the editor: which quote it stands for. */
+const EDIT_CHIP_ATTR = 'data-quote-id'
+/** Where a chip sat in the message text, as read back from the editor. */
+interface QuoteSpot {
+  readonly id: string
+  readonly at: number
+}
+
+/** A quote being edited: the chip plus the offset the message recorded. */
+type EditQuote = Quote & { readonly at?: number }
 
 // 悬停全文预览（body 级 fixed 单例，上方优先、放不下翻下方）
 let tipEl: HTMLElement | null = null
@@ -387,6 +398,94 @@ function placeCaretEnd(element: HTMLElement): void {
   selection.addRange(range)
 }
 
+/**
+ * What the open editor actually says: the typed text plus the offset each chip
+ * still inside it occupies — the same shape `composeMessage` writes to `at`.
+ *
+ * The editor is one contentEditable holding text *and* chips, so the plain
+ * `innerText` would count each chip's label; walking the nodes lets the chips
+ * stay where the user put them and keeps the sent order identical to what the
+ * card shows. Leading whitespace is skipped exactly like `composeMessage`
+ * trims it, so an offset stays valid after the trim.
+ */
+function readEditBody(body: HTMLElement): { text: string; spots: QuoteSpot[] } {
+  let text = ''
+  let at = 0
+  let started = false
+  const spots: QuoteSpot[] = []
+  const walk = (parent: Node): void => {
+    for (const child of Array.from(parent.childNodes)) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        const data = child.nodeValue ?? ''
+        for (const char of data) {
+          if (!started && /\s/u.test(char)) continue
+          started = true
+          at += 1
+        }
+        text += data
+        continue
+      }
+      if (!(child instanceof HTMLElement)) continue
+      if (child.classList.contains('dsqe-echip')) {
+        const id = child.getAttribute(EDIT_CHIP_ATTR)
+        if (id !== null && id.length > 0) spots.push({ id, at })
+        continue
+      }
+      if (child.tagName === 'BR') {
+        text += '\n'
+        if (!started) {
+          // A leading line break does not survive the trim either.
+          continue
+        }
+        at += 1
+        continue
+      }
+      const block = child.tagName === 'DIV' || child.tagName === 'P'
+      if (block && text.length > 0 && !text.endsWith('\n')) {
+        text += '\n'
+        if (started) at += 1
+      }
+      walk(child)
+      if (block && child.nextSibling !== null) {
+        text += '\n'
+        if (started) at += 1
+      }
+    }
+  }
+  walk(body)
+  return { text, spots }
+}
+
+/** Drop the empty block Chrome leaves behind when the last line is deleted. */
+function tidyEditText(text: string): string {
+  // Trailing whitespace only: trimming the head would invalidate every offset
+  // already recorded for the chips after it (`composeMessage` trims it later).
+  return text.replace(/\s+$/u, '')
+}
+
+/**
+ * Lay the message into the editor the way the bubble showed it: each chip
+ * between the characters it was typed between. `at` is the offset the wire
+ * payload recorded; messages written before that field existed have none and
+ * keep the old "every chip first" layout.
+ */
+function fillEditBody(body: HTMLElement, rest: string, quotes: readonly EditQuote[]): void {
+  const marks = quotes
+    .map((quote) => ({
+      quote,
+      at: quote.at === undefined ? 0 : Math.max(0, Math.min(rest.length, quote.at)),
+    }))
+    .sort((left, right) => left.at - right.at)
+  let cursor = 0
+  for (const mark of marks) {
+    const at = Math.max(cursor, mark.at)
+    if (at > cursor) body.appendChild(document.createTextNode(rest.slice(cursor, at)))
+    body.appendChild(chipElement(mark.quote))
+    cursor = at
+  }
+  if (cursor < rest.length) body.appendChild(document.createTextNode(rest.slice(cursor)))
+}
+
 // ---- 悬停全文预览 ----
 
 const onTipReflow = (): void => {
@@ -468,6 +567,11 @@ function showTip(chip: HTMLElement, text: string): void {
 function chipElement(quote: Quote): HTMLElement {
   const chip = document.createElement('span')
   chip.className = 'dsqe-echip'
+  chip.setAttribute(EDIT_CHIP_ATTR, quote.id)
+  // Inline, non-editable: the chip keeps its place inside the sentence while
+  // the surrounding text stays editable. Without `contenteditable=false` a
+  // Backspace beside it would eat the pill (and take the quote with it).
+  chip.contentEditable = 'false'
   // The × occupies the icon's slot on hover (CSS swaps them via
   // data-x-shown), so the pill never changes width. The preview is a
   // body-level fixed panel above the chip with a short close delay, so the
@@ -501,8 +605,9 @@ function removeQuoteChip(chip: HTMLElement, id: string): void {
 
 function syncSendDisabled(): void {
   if (editorSendBtn === null) return
-  const text = (editorTextEl?.innerText ?? '').trim()
-  editorSendBtn.disabled = text === '' && editingQuotes.length === 0
+  const body = editorEl?.querySelector<HTMLElement>('.dsqe_editText')
+  const typed = body === null || body === undefined ? '' : tidyEditText(readEditBody(body).text).trim()
+  editorSendBtn.disabled = typed === '' && editingQuotes.length === 0
 }
 
 function submitComposer(): void {
@@ -532,18 +637,16 @@ function startEdit(row: HTMLElement): void {
   editor.className = 'dsqe_editor'
   editor.setAttribute('data-dsqe-editor', 'true')
 
+  // One contentEditable for the whole message: chips sit inside the sentence
+  // where the user typed them (same `at` offsets the bubble uses), instead of
+  // being collected in a row above the text.
   const body = document.createElement('div')
-  body.className = 'dsqe_editBody'
-  for (const quote of editingQuotes) body.appendChild(chipElement(quote))
-
-  const text = document.createElement('div')
-  text.className = 'dsqe_editText'
-  text.contentEditable = 'true'
-  text.spellcheck = false
-  text.setAttribute('role', 'textbox')
-  text.setAttribute('aria-label', t('row.edit'))
-  text.textContent = scan.rest
-  body.appendChild(text)
+  body.className = 'dsqe_editText'
+  body.contentEditable = 'true'
+  body.spellcheck = false
+  body.setAttribute('role', 'textbox')
+  body.setAttribute('aria-label', t('row.edit'))
+  fillEditBody(body, scan.rest, editingQuotes)
   editor.appendChild(body)
 
   const foot = document.createElement('div')
@@ -569,9 +672,9 @@ function startEdit(row: HTMLElement): void {
   editor.appendChild(foot)
 
   editorSendBtn = send
-  editorTextEl = text
-  text.addEventListener('input', syncSendDisabled)
-  text.addEventListener('keydown', (event) => {
+  editorTextEl = body
+  body.addEventListener('input', syncSendDisabled)
+  body.addEventListener('keydown', (event) => {
     if (!(event instanceof KeyboardEvent)) return
     if (event.key === 'Escape') {
       event.preventDefault()
@@ -587,8 +690,8 @@ function startEdit(row: HTMLElement): void {
 
   row.appendChild(editor)
   editorEl = editor
-  text.focus()
-  placeCaretEnd(text)
+  body.focus()
+  placeCaretEnd(body)
 }
 
 function exitEdit(): void {
@@ -604,10 +707,21 @@ function exitEdit(): void {
 
 function sendEdit(): void {
   const row = editingRow
-  const textEl = editorEl?.querySelector<HTMLElement>('.dsqe_editText')
-  if (row === null || textEl == null) return
-  const edited = (textEl.innerText ?? '').replace(/^\s+/, '').replace(/\s+$/, '')
-  const wire = composeMessage(edited, editingQuotes)
+  const body = editorEl?.querySelector<HTMLElement>('.dsqe_editText')
+  if (row === null || body == null) return
+  const read = readEditBody(body)
+  const edited = tidyEditText(read.text)
+  // Only the chips still in the editor count: the user may have removed one
+  // with its ×, and the sent payload must match what the card shows.
+  const present = new Set<string>()
+  for (const chip of Array.from(body.querySelectorAll(`.dsqe-echip[${EDIT_CHIP_ATTR}]`))) {
+    const id = chip.getAttribute(EDIT_CHIP_ATTR)
+    if (id !== null && id.length > 0) present.add(id)
+  }
+  const quotes = editingQuotes.filter((quote) => present.has(quote.id))
+  const spots = new Map<string, number>()
+  for (const spot of read.spots) if (present.has(spot.id)) spots.set(spot.id, spot.at)
+  const wire = composeMessage(edited, quotes, spots)
   const actions = runtime.inputActions
   exitEdit()
   if (actions === null) {
