@@ -17,8 +17,9 @@ src/client/dom.ts                # composer/选区 DOM 约定、提交手势、�
 src/client/icons.tsx             # React 组件用内联图标
 src/client/svg.ts                # 纯 DOM chrome 用的 SVG 字符串
 src/client/selection-toolbar.tsx # 划词工具条（shell.overlay）
-src/client/composer-panel.tsx    # 输入框 chip 行 + 标记 + 发送折叠 + 撤回还原
-src/client/chip.tsx              # React 引用 chip（输入框/气泡内，悬停全文预览，长文本胶囊图标）
+src/client/composer-panel.tsx    # 输入框行内胶囊编排（光标处插节点）+ 顶部 chip 行兜底 + 标记 + 发送折叠 + 撤回还原
+src/client/chip.tsx              # React 引用 chip（顶部行/气泡内，悬停全文预览，长文本胶囊图标）
+src/client/inline-chips.ts       # 行内胶囊：宿主 reference-chip 节点的插入 / 存在性订阅 / source 注册（0.7.0+）
 src/client/detail.tsx            # 右侧详情（消息胶囊点击打开，模块级 store + 本地抽屉兜底）
 src/client/locate.ts             # 「定位原文」：拍平索引 + 反查 Range + 滚动 + 标记状态（无 React）
 src/client/source-mark.tsx        # 下划线层（shell.overlay order 90）：Range 的 client rects 叠 fixed 线
@@ -42,7 +43,7 @@ test/mock/                       # mock dsh 客户端（含 -10 模拟消息插�
 |---|---|---|
 | `shell.overlay` | list slot | 定位下划线层（order 90）+ 划词工具条（order 100）+ 本地详情抽屉兜底（order 110），root 级常驻 |
 | `sidebar.right.pane.tab` (+ `.title`) | keyed slot | 原生侧边栏详情标签页正文（`key` = 标签 id，配合 `sidebarRightTabs.register` + `sidebarRight.openTabIn`） |
-| `conversation.input.overlay` | list slot | 桥（order 1，发布 inputActions/markFolded）+ chip 行（order 20） |
+| `conversation.input.overlay` | list slot | 桥（order 1，发布 inputActions/markFolded）+ 顶部 chip 行（order 20，**仅兜底**；正常走行内胶囊） |
 | `conversation.chat.node` | keyed slot | `user` / `steering`（`priority: -20`、`locale: 'chat'`）：标记 + 引用气泡 + 委托 |
 | `ctx.locale` | 语言服务 | `register(ns, {zh, en})` + `bind` |
 | MutationObserver | effect | 回显/排队预览协议块剥离 |
@@ -58,7 +59,7 @@ user/steering 选举胜出后，视图只输出 `display: contents` 标记（`da
 - 其他消息插件视图（负优先级）存在时整行委托给它（共存），标记与注册照常。
 
 **2. 划词引用链**（继承自 select-quote-simple，原样保留）
-选区准入（起止都在 `[data-chat-flow-key]` 且不在 composer）→ 工具条浮出 → 「添加到对话」进 store（按会话持久化）→ 输入框 chip（U+200B 保发送键）→ 发送手势捕获阶段折叠成协议块 → 回显剥离 → 气泡内 chip 回显 → 撤回还原。
+选区准入（起止都在 `[data-chat-flow-key]` 且不在 composer）→ 工具条浮出 → 「添加到对话」进 store（按会话持久化）→ 输入框**行内胶囊**（插在光标处，见 §13；U+200B 保发送键）→ 发送手势捕获阶段折叠成协议块 → 回显剥离 → 气泡内 chip 回显 → 撤回还原。
 
 **3. 消息编辑链**（继承自 dsh-plugin-edit）
 悬停标记行 → 普通消息把「编辑」+「撤回」注入宿主自己的操作行（`MessageIconActions` 的 `data-clock="start"` 根元素，编辑在前、撤回紧接其后，React 重建后由 pointerover/pointermove 重注入）；这两个按钮是**每行各一份的常驻元素**（`ensureHostButtons` 在 node 视图挂载时即注入），放在宿主自己的 `[data-clock]` 容器内，因此**跟随复制按钮的悬停显隐过渡一起出现/淡出**，不由插件单独增删；引用气泡无宿主行，退回插件自绘操作行（时间/复制/编辑/撤回，尺寸与间距对齐宿主 `MessageIconActions`：28px 按钮 / 15px 图标 / 8px gap / 13px 时间，定位在恒定预留区内距气泡 4px）→ 编辑卡（引用 chip + contenteditable 正文 + 提示 + 取消/发送，`fit-content` 右对齐、`max-width: 76%`）→ 发送：`runtime.markFolded()` 置折叠守卫 → `setDraft(composeMessage(正文, 剩余引用))` → 40ms 后触发 composer 主发送按钮。
@@ -93,11 +94,23 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 **11. 输入框手动调高（0.5.0+，composer-resize.ts）**
 纯 DOM 装饰（与 hover chrome 同生命周期，`ctx.effect(() => watchComposerResize())`）：MutationObserver 盯 `[data-composer-card]`，出现的卡片加 `dsqe_rzCard`（position:relative）并在顶边中央挂一枚 grip（`dsqe-rzHandle`，absolute top:-5px，76×12 命中区，细横条 `::after` 默认 0.3 透明度、悬停/拖拽 0.75）。`pointerdown` 起拖（Pointer Capture，body 标 `data-dsqe-resizing` 锁选择 + ns-resize 光标）：目标元素 = 卡内 `[data-lexical-editor="true"]` 自身或其最近 `overflow-y: auto/scroll` 祖先（`composerScrollAreaOf`），高度 = 起始高 + (startY − clientY)（输入框贴底，**上拖变高**），写入 inline `height`/`max-height` 并强制 `overflow-y: auto`，钳制在 `COMPOSER_MIN_HEIGHT`(44) ～ `min(COMPOSER_MAX_HEIGHT`(640), 60vh)`；`pointerup` 存 localStorage（`dsh.select-quote-with-edit.composerHeight`），卡片再现时（含刷新后）自动套用；`dblclick` 清 inline 高度 + 清存储复原。与 chip 行的 `--dsqe-pad` 预留互不影响（ResizeObserver 自适应）。
 
+**13. 输入框行内胶囊（0.7.0+，inline-chips.ts）**
+待发引用与粘贴生成的长文本胶囊**直接坐在编辑器正文里**（插在光标处、跟着文字排版流动），不再钉在输入框顶部一行。做法是**复用宿主自己的行内引用节点**，不自己造节点：
+
+- 宿主 composer 是 Lexical 编辑器，`[data-lexical-editor="true"]` 根元素上有 `__lexicalEditor`；它内建的 `reference-chip`（`DecoratorNode`，`isInline() === true`、`isKeyboardSelectable() === false`）就是 `@` 文件/会话引用的那枚胶囊——**在行内、方向键一步跨过、Backspace/Delete 整块删除**。插件用 `editor._nodes.get('reference-chip').klass` 拿构造器，`new` 一个实例以 `source: 'dsh-quote'` 区分来源，宿主自己的 React 渲染与删除语义原样拿来用（自造节点注册不进宿主 `_nodes`，渲染与键盘行为都得重写，故不采用）
+- 插入在 `editor.update(fn, { discrete: true })` 里做：`_selection.anchor.type === 'text'` → `splitText(offset)` 后在 head 上 `insertAfter(chip)`（offset 0 用 `insertBefore`）；`'element'` → `parent.splice(offset, 0, [chip])`；**没有可用光标**（焦点还在对话区，刚划完词）→ 落到最后一个 block 的 `append`。成功后 `chip.selectNext(0,0)` 把光标停在胶囊后面，接着打字就是「胶囊 + 正文」
+- **胶囊与 store 以编辑器为准**：`editor.registerUpdateListener` 每次全量 `scan(_nodeMap)` 收集 `source === 'dsh-quote'` 的胶囊，发布 `present: Set<quoteId>`（同时给 `getElementByKey` 拿到的 DOM 打 `data-dsqe-active` 高亮）。面板订阅这份集合：store 里有、编辑器里没有的补插；**编辑器里没有但曾经有过**的 → `removeQuote`。所以**按删除键删胶囊就等于删引用**，不需要额外监听键盘
+- **序列化不能拒**：胶囊若活到提交，宿主会走 `serializeReference('dsh-quote', id)` 找 owner 的 codec，找不到就 reject 整条消息。故 `registerQuoteSource` 在 `ctx.get('inputTriggers')` 上注册同名 source（`trigger` 用一个永不输入的 `\u0002`，只为 codec 与点击路由存在）：`codec.serialize` 兜底成 `<quote>…</quote>`、`openReference` 把点击路由回「定位原文 / 打开详情」（服务是兄弟插件、可能晚于 `apply()` 就绪，故 250ms × 40 次重试注册）。正常路径仍是发送手势里 `composeMessage` 折叠成协议块
+- **占位符必须剥**：节点 `getTextContent()` 是 `clipboardText`，composer 的剪贴板投影里每枚胶囊占一个 **U+FFFC**；`protocol.composeMessage` 先用 `stripChipPlaceholders`（`/[\uE100-\uE11D\uFFFC]/gu`，与宿主 `REFERENCE_PLACEHOLDER_RE` 同集）剥掉再拼正文，否则占位符会漏进消息
+- **降级到顶部行**：`inlineChipsSupported()`（编辑器在 + 节点类型在）不成立、或 `insertQuoteChip` 插入后 `present` 里没有该 id（编辑器静默丢弃），面板就把 `mode` 切到 `'row'`，退回 0.6.0 的顶部 chip 行（`--dsqe-pad` 预留高度那套只在 row 模式生效）；切换会话 `resetInlineChips()` 清掉缓存的存在性
+
 ## 依赖的产品内部约定（升级 dsh 后复核）
 
 - `[data-composer-card]` + 主发送按钮为卡片内最后一个 `button`（停止按钮渲染 `svg rect`）；
 - 用户消息悬停操作行根元素带 `data-clock="start"`（助手行是 `end`；CSS module 类名会被哈希，属性是稳定钩子）；
 - `[data-lexical-editor="true"]`、`[data-chat-flow-key]`、`[data-conversation-scroll]`、`[data-submission-echo]` / `[data-queue-dock]`；
+- 行内胶囊：根元素上的 `__lexicalEditor`（`update` / `_nodes` / `_nodeMap` / `_selection` / `registerUpdateListener` / `getElementByKey`）、节点类型 `reference-chip`（构造参数 `{source, ref, label, appearance, clipboardText}`、`getSource()` / `getReference()`）、chip 在剪贴板投影里占 U+FFFC、占位符正则 `/[\\uE100-\\uE11D\\uFFFC]/gu`；
+- `ctx.get('inputTriggers').registerSource({ trigger, name, codec: { clipboardText, serialize }, openReference })`：未注册 source 的胶囊活到提交会让整条消息 reject；
 - 槽位 `shell.overlay` / `conversation.input.overlay`（props 带 `useInput`、`inputActions.setDraft`）/ `conversation.chat.node`（user/steering）；
 - `ctx.locale.register/bind`；`ctx.slots.inject/register/entries`；
 - `ctx.get('sessions')` / `ctx.get('uiConversation')`（撤回定位 seq 与发命令用）；`sessions.binding(id).session.command(line)`；
@@ -116,3 +129,6 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 | 气泡出现 JSON | 委托链是否落到宿主视图（宿主/兜底路径会剥块） |
 | 预览面板错位/巨大 | JS 与 CSS 的类名前缀是否一致（连字符 vs 下划线） |
 | 点 chip 没滚到原文 / 提示找不到 | 原文是否在已加载消息里；下划线层是否在 `shell.overlay`（order 90）；拍平索引的块边界（`blockOwnerOf`）是否被新渲染结构打乱 |
+| 引用还是显示在输入框顶部一行（不是行内） | 宿主是否还注册 `reference-chip` 节点（`inlineChipsSupported()`）；插入后 `present` 里有没有该 id——任一失败即 `mode='row'` 兜底，看控制台无异常属预期降级 |
+| 行内胶囊删掉了但引用还在 / 反过来 | `registerUpdateListener` 是否绑上（`ensureAttached` 只在 `insertQuoteChip` 时触发）；`seenRef` 记过的 id 才会被删，切换会话后 `resetInlineChips()` 会清空 |
+| 发送出去多出「￼」字符 | `composeMessage` 是否还带 `stripChipPlaceholders`（U+FFFC 来自 chip 的 `getTextContent`） |

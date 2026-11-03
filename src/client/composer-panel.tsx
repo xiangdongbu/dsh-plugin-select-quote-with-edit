@@ -8,6 +8,13 @@ import React, {
 } from 'react'
 import { composerCardOf, isSubmitKey, willSubmit } from './dom.ts'
 import { QuoteChip } from './chip.tsx'
+import {
+  inlineChipsSupported,
+  insertQuoteChip,
+  onChipPresence,
+  resetInlineChips,
+  setActiveChip,
+} from './inline-chips.ts'
 import { t } from './i18n.ts'
 import { openDetail } from './detail.tsx'
 import { clearSourceMark, getSourceMark, locateQuote } from './locate.ts'
@@ -78,6 +85,13 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
   const actionsRef = useRef(inputActions)
   const foldingRef = useRef(false)
   const composing = useComposing()
+  // Inline chips are the goal; the row above the editor stays as the fallback
+  // for hosts that do not register the reference-chip node.
+  const [mode, setMode] = useState<'inline' | 'row'>('inline')
+  const [tick, setTick] = useState(0)
+  const presentRef = useRef<ReadonlySet<string>>(new Set<string>())
+  const seenRef = useRef<Set<string>>(new Set<string>())
+  const attemptsRef = useRef(0)
   draftRef.current = draft
   actionsRef.current = inputActions
 
@@ -111,6 +125,61 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
     return subscribe(sync)
   }, [sync, sessionId])
 
+  // The editor publishes which quote ids currently own a chip. A chip deleted
+  // with Backspace / Delete simply stops appearing here — that is how removal
+  // reaches the store, so a chip and its pending quote never drift apart.
+  useEffect(() => {
+    return onChipPresence((next) => {
+      presentRef.current = next
+      for (const quote of getQuotes()) {
+        if (!next.has(quote.id) && seenRef.current.has(quote.id)) removeQuote(quote.id)
+      }
+      for (const id of next) seenRef.current.add(id)
+    })
+  }, [])
+
+  // Session switch rebuilds the editor: neither the chip set nor the
+  // "already seen" bookkeeping survives it.
+  useEffect(() => {
+    resetInlineChips()
+    presentRef.current = new Set<string>()
+    seenRef.current = new Set<string>()
+    attemptsRef.current = 0
+  }, [sessionId])
+
+  // Keep the editor in step with the store: every pending quote owns exactly
+  // one chip, minted at the caret when it arrives.
+  useEffect(() => {
+    if (mode !== 'inline') return
+    for (const quote of items) {
+      if (presentRef.current.has(quote.id)) continue
+      if (!inlineChipsSupported()) {
+        attemptsRef.current += 1
+        if (attemptsRef.current > 25) setMode('row')
+        return
+      }
+      if (!insertQuoteChip(quote)) {
+        setMode('row')
+        return
+      }
+      seenRef.current.add(quote.id)
+    }
+  }, [items, draft, mode, sessionId, tick])
+
+  // The composer can mount a beat after this overlay; poll briefly while a
+  // quote still has no chip rather than falling back to the row too early.
+  useEffect(() => {
+    if (mode !== 'inline' || items.length === 0) return
+    if (items.every((quote) => presentRef.current.has(quote.id))) return
+    const timer = setTimeout(() => setTick((value) => value + 1), 400)
+    return () => clearTimeout(timer)
+  }, [mode, items, tick, draft])
+
+  // Ring the chip whose source text is underlined in the transcript.
+  useEffect(() => {
+    setActiveChip(located?.quoteId ?? null)
+  }, [located])
+
   // A quote that left the composer (sent, or deleted) must not keep the
   // transcript underlined — the chip that owns the mark is gone.
   useEffect(() => {
@@ -119,8 +188,10 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
     if (!items.some((quote) => quote.id === located.quoteId)) clearSourceMark()
   }, [items])
 
-  // Reserve draft height under the absolute chip row.
+  // Reserve draft height under the absolute chip row (row mode only — inline
+  // chips sit in the text and need no reservation).
   useEffect(() => {
+    if (mode !== 'row') return
     const element = stackRef.current
     if (!element) return
     const card = composerCardOf(element)
@@ -137,7 +208,7 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
       card.classList.remove('dsqe_pad')
       card.style.removeProperty('--dsqe-pad')
     }
-  }, [items, sessionId])
+  }, [items, sessionId, mode])
 
   // Keep the invisible marker in step with the quote list, once per list /
   // draft change. Never write while an IME composition is in flight.
@@ -214,7 +285,7 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
     setDraftSafe(restored.rest)
   }, [draft, sessionId, setDraftSafe])
 
-  if (!sessionId || items.length === 0) return null
+  if (!sessionId || items.length === 0 || mode === 'inline') return null
 
   return (
     <div ref={stackRef} className="dsqe-chipRow">

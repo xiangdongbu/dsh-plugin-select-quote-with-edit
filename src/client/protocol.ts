@@ -25,6 +25,21 @@ const PROTOCOL_HEADER = [
 /** The U+200B marker keeps the send button usable when only quotes are pending. */
 export const DRAFT_MARKER = '\u200b'
 
+/**
+ * One U+FFFC stands in for one inline chip in the composer's clipboard
+ * projection (the host uses the same placeholder for its own `@` references).
+ * The chip carries the quote; the character itself must never reach the model.
+ */
+export const CHIP_PLACEHOLDER = '\uFFFC'
+
+/** The host strips these from any external text: a literal one would forge a chip. */
+const CHIP_PLACEHOLDER_RE = /[\uE100-\uE11D\uFFFC]/gu
+
+/** Remove chip placeholders (and any host-reserved lookalike) from a draft. */
+export function stripChipPlaceholders(draft: string): string {
+  return draft.replace(CHIP_PLACEHOLDER_RE, '')
+}
+
 export function withDraftMarker(draft: string): string {
   return draft + DRAFT_MARKER
 }
@@ -59,7 +74,7 @@ function newQuoteId(): string {
  * Called only at the send gesture so the composer never shows the JSON.
  */
 export function composeMessage(draft: string, quotes: readonly Quote[]): string {
-  const rest = stripDraftMarker(draft).replace(/^\s+/, '')
+  const rest = stripChipPlaceholders(stripDraftMarker(draft)).replace(/^\s+/, '')
   if (quotes.length === 0) return rest
   const payload = quotes.map((quote) => ({
     text: quote.text,

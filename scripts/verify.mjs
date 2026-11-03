@@ -407,6 +407,21 @@ const {
     'long-text threshold is exported for the paste interceptor',
     typeof protocol.LONG_TEXT_THRESHOLD === 'number' && protocol.LONG_TEXT_THRESHOLD > 0,
   )
+  check(
+    'inline chip placeholders are stripped before the message is composed',
+    composeMessage(`${protocol.CHIP_PLACEHOLDER}正文${protocol.CHIP_PLACEHOLDER}`, [
+      { id: 'q7', text: '引用' },
+    ]).endsWith('正文') &&
+      !composeMessage(`${protocol.CHIP_PLACEHOLDER}正文`, [{ id: 'q8', text: 'x' }]).includes(
+        protocol.CHIP_PLACEHOLDER,
+      ),
+  )
+  check(
+    'only a placeholder draft still folds into a sendable message',
+    composeMessage(protocol.CHIP_PLACEHOLDER.repeat(2), [{ id: 'q9', text: '引用' }]).includes(
+      '<dsh-quotes>',
+    ),
+  )
 }
 
 // ---------------------------------------------------------------- locate tests
@@ -701,6 +716,15 @@ check(
     clientCode.includes('data-active') &&
     // The underline must be painted, never injected into the message tree.
     !clientCode.includes('surroundContents'),
+)
+check(
+  'quotes enter the composer as the host inline reference node, row is only a fallback',
+  clientCode.includes('reference-chip') &&
+    clientCode.includes('dsh-quote') &&
+    clientCode.includes('registerSource') &&
+    clientCode.includes('inputTriggers') &&
+    clientCode.includes('insertQuoteChip') &&
+    clientCode.includes('dsqe-active'),
 )
 
 // ---------------------------------------------------------------- withdraw engine

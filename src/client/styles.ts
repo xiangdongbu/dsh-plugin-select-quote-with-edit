@@ -680,6 +680,16 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
 .dsqe_btnSend:hover { filter: brightness(1.08); }
 .dsqe_btnSend[disabled] { opacity: 0.45; cursor: default; filter: none; }
 
+/* ---------- 行内胶囊（宿主 reference-chip 节点） ---------- */
+/* The chip is the host's own inline reference node; we only add the ring that
+   marks the quote whose source text is currently underlined. */
+[data-composer-chip='dsh-quote'] { cursor: pointer; }
+[data-composer-chip='dsh-quote'][data-dsqe-active] {
+  outline: 2px solid var(--dsqe-src-line);
+  outline-offset: 1px;
+  border-radius: 6px;
+}
+
 /* ---------- 宿主视图不可用时的兜底气泡 ---------- */
 .dsqe-fallbackRow {
   display: flex;

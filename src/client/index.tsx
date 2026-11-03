@@ -9,7 +9,8 @@ import { watchMessageChrome } from './chrome.ts'
 import { SelectionToolbar } from './selection-toolbar.tsx'
 import { ComposerPanel } from './composer-panel.tsx'
 import { ComposerBridge } from './composer-bridge.tsx'
-import { QuoteDetailPanel } from './detail.tsx'
+import { QuoteDetailPanel, openDetail } from './detail.tsx'
+import { locateQuote } from './locate.ts'
 import { SourceMarkOverlay } from './source-mark.tsx'
 import { installSidebarDetail } from './sidebar-tab.tsx'
 import { UserMessageView } from './transcript.tsx'
@@ -17,6 +18,7 @@ import { pickDelegate } from './host-node.ts'
 import { runtime } from './runtime.ts'
 import { watchComposerResize } from './composer-resize.ts'
 import { watchQuotePaste } from './paste.ts'
+import { registerQuoteSource } from './inline-chips.ts'
 
 /**
  * Browser half of dsh-plugin-select-quote-with-edit — the two features in one
@@ -54,6 +56,13 @@ export function apply(ctx: ClientContext): void {
   // Pasting copied message content into the composer restores its quotes as
   // pending chips (the quotes ride in the clipboard's HTML flavor).
   ctx.effect(() => watchQuotePaste(), 'select-quote-with-edit: quote paste')
+
+  // Inline chips ride the host's own reference node; the source registration
+  // owns click routing (「定位原文」/ 详情) and the fallback serializer.
+  ctx.effect(
+    () => registerQuoteSource(ctx, { openDetail, locate: locateQuote }),
+    'select-quote-with-edit: inline quote source',
+  )
 
   // Root: always-mounted selection toolbar. Root-scoped so transcript
   // selections are observed no matter which session or history view is up.
