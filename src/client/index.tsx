@@ -18,7 +18,7 @@ import { pickDelegate } from './host-node.ts'
 import { runtime } from './runtime.ts'
 import { watchComposerResize } from './composer-resize.ts'
 import { watchQuotePaste } from './paste.ts'
-import { registerQuoteSource } from './inline-chips.ts'
+import { registerQuoteSource, watchChipDeletion } from './inline-chips.ts'
 
 /**
  * Browser half of dsh-plugin-select-quote-with-edit — the two features in one
@@ -63,6 +63,10 @@ export function apply(ctx: ClientContext): void {
     () => registerQuoteSource(ctx, { openDetail, locate: locateQuote }),
     'select-quote-with-edit: inline quote source',
   )
+
+  // Backspace / Delete aimed at one of our chips removes it whole. Lexical only
+  // does that for a text-node caret; on an element point it splits the block.
+  ctx.effect(() => watchChipDeletion(), 'select-quote-with-edit: chip deletion')
 
   // Root: always-mounted selection toolbar. Root-scoped so transcript
   // selections are observed no matter which session or history view is up.

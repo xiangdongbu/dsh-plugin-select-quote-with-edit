@@ -97,12 +97,17 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 **13. 输入框行内胶囊（0.7.0+，inline-chips.ts）**
 待发引用与粘贴生成的长文本胶囊**直接坐在编辑器正文里**（插在光标处、跟着文字排版流动），不再钉在输入框顶部一行。做法是**复用宿主自己的行内引用节点**，不自己造节点：
 
-- 宿主 composer 是 Lexical 编辑器，`[data-lexical-editor="true"]` 根元素上有 `__lexicalEditor`；它内建的 `reference-chip`（`DecoratorNode`，`isInline() === true`、`isKeyboardSelectable() === false`）就是 `@` 文件/会话引用的那枚胶囊——**在行内、方向键一步跨过、Backspace/Delete 整块删除**。插件用 `editor._nodes.get('reference-chip').klass` 拿构造器，`new` 一个实例以 `source: 'dsh-quote'` 区分来源，宿主自己的 React 渲染与删除语义原样拿来用（自造节点注册不进宿主 `_nodes`，渲染与键盘行为都得重写，故不采用）
-- 插入在 `editor.update(fn, { discrete: true })` 里做：`_selection.anchor.type === 'text'` → `splitText(offset)` 后在 head 上 `insertAfter(chip)`（offset 0 用 `insertBefore`）；`'element'` → `parent.splice(offset, 0, [chip])`；**没有可用光标**（焦点还在对话区，刚划完词）→ 落到最后一个 block 的 `append`。成功后 `chip.selectNext(0,0)` 把光标停在胶囊后面，接着打字就是「胶囊 + 正文」
-- **胶囊与 store 以编辑器为准**：`editor.registerUpdateListener` 每次全量 `scan(_nodeMap)` 收集 `source === 'dsh-quote'` 的胶囊，发布 `present: Set<quoteId>`（同时给 `getElementByKey` 拿到的 DOM 打 `data-dsqe-active` 高亮）。面板订阅这份集合：store 里有、编辑器里没有的补插；**编辑器里没有但曾经有过**的 → `removeQuote`。所以**按删除键删胶囊就等于删引用**，不需要额外监听键盘
-- **序列化不能拒**：胶囊若活到提交，宿主会走 `serializeReference('dsh-quote', id)` 找 owner 的 codec，找不到就 reject 整条消息。故 `registerQuoteSource` 在 `ctx.get('inputTriggers')` 上注册同名 source（`trigger` 用一个永不输入的 `\u0002`，只为 codec 与点击路由存在）：`codec.serialize` 兜底成 `<quote>…</quote>`、`openReference` 把点击路由回「定位原文 / 打开详情」（服务是兄弟插件、可能晚于 `apply()` 就绪，故 250ms × 40 次重试注册）。正常路径仍是发送手势里 `composeMessage` 折叠成协议块
-- **占位符必须剥**：节点 `getTextContent()` 是 `clipboardText`，composer 的剪贴板投影里每枚胶囊占一个 **U+FFFC**；`protocol.composeMessage` 先用 `stripChipPlaceholders`（`/[\uE100-\uE11D\uFFFC]/gu`，与宿主 `REFERENCE_PLACEHOLDER_RE` 同集）剥掉再拼正文，否则占位符会漏进消息
-- **降级到顶部行**：`inlineChipsSupported()`（编辑器在 + 节点类型在）不成立、或 `insertQuoteChip` 插入后 `present` 里没有该 id（编辑器静默丢弃），面板就把 `mode` 切到 `'row'`，退回 0.6.0 的顶部 chip 行（`--dsqe-pad` 预留高度那套只在 row 模式生效）；切换会话 `resetInlineChips()` 清掉缓存的存在性
+- 宿主 composer 是 Lexical 编辑器，`[data-lexical-editor="true"]` 根元素上有 `__lexicalEditor`；它内建的 `reference-chip`（`DecoratorNode`，`isInline() === true`、`isKeyboardSelectable() === false`）就是 `@` 文件/会话引用的那枚胶囊。插件用 `editor._nodes.get('reference-chip').klass` 拿构造器，`new` 一个实例以 `source: 'dsh-quote'` 区分来源，宿主自己的 React 渲染原样拿来用
+- 插入在 `editor.update(fn, { discrete: true })` 里做：`_selection.anchor.type === 'text'` → `splitText(offset)` 后在 head 上 `insertAfter(chip)`（offset 0 用 `insertBefore`）；`'element'` → `parent.splice(offset, 0, [chip])`；**没有可用光标**（焦点还在对话区）→ 落到最后一个 block 的 `append`。插完把光标停在**同一段落内**紧挨胶囊的位置（`parent.select(index + 1, index + 1)`）——用 `chip.selectNext()` 会得到 root 级 element 点，Backspace 会去看相邻的 block 而不是胶囊
+- **读节点属性必须绕开 `$` API**：`ReferenceChipNode.getSource()/getReference()` 内部走 `$getNodeByKey`，在没有活动 editor state 的地方调用会抛 Lexical **#195**。而 update listener 恰好就是这种地方——早期版本因此在 update 提交后抛错，调用方误判「插入失败」，于是反复重插（一次引用插出上百枚胶囊、顶部行也不消失）。现在只读原始字段 `__source` / `__ref`（getter 仅作新宿主的兜底，且包 try/catch），并且每个节点单独 try/catch：**一个坏节点不能打断整次扫描**
+- **插入是幂等的**：模块级 `owned` 记住已插过的 id，`present` / 已提交状态里已有该 id 就直接算成功；同一 id 连续失败两次就放弃并退回顶部行。面板（overlay）重挂载会重置 React state，幂等守卫让「重挂载 → 再插一次」不再可能
+- **删除**：`watchChipDeletion()` 在 document 捕获阶段截 `Backspace` / `Delete`，只处理「光标紧挨我们自己的胶囊、中间没有可删字符」的情况（文本点看前后兄弟，element 点看相邻子节点、必要时下钻到 block 的首/尾叶子），`target.remove()` 后把光标重锚到父节点，并**立刻 `removeQuote`**——否则面板看到「store 有、编辑器没有」会马上补插回来。带 `⌘/Ctrl/Alt/Shift` 的组合键一律放行
+- **胶囊与 store 以编辑器为准**：`registerUpdateListener` 每次全量扫 `_nodeMap`，发布 `present: Set<quoteId>`（并给 `getElementByKey` 拿到的 DOM 打 `data-dsqe-active` 高亮）。面板订阅这份集合：store 里有、编辑器里没有的补插；**编辑器里没有但曾经有过**的 → 延迟 220ms 再 `removeQuote`（一次扫描可能落后一个 state），删前用 `chipPresent()` 以已提交状态复核
+- **不能写 U+200B 标记**：宿主的 `setDraft(text)` 是「清空 root + 按行重建段落」，会连带擦掉所有胶囊。行内模式下胶囊本身就是内容、发送键已可用，所以标记 effect **只在 row 降级模式**里跑
+- **序列化不能拒**：胶囊若活到提交，宿主会走 `serializeReference('dsh-quote', id)` 找 owner 的 codec，找不到就 reject 整条消息。故 `registerQuoteSource` 在 `ctx.get('inputTriggers')` 上注册同名 source（`trigger` 用一个永不输入的 `\u0002`）：`codec.serialize` 兜底成 `<quote>…</quote>`、`openReference` 把点击路由回「定位原文 / 打开详情」（服务可能晚于 `apply()` 就绪，250ms × 40 次重试）
+- **占位符必须剥**：节点 `getTextContent()` 是 `clipboardText`，composer 的剪贴板投影里每枚胶囊占一个 **U+FFFC**；`protocol.composeMessage` 先用 `stripChipPlaceholders`（`/[\uE100-\uE11D\uFFFC]/gu`，与宿主 `REFERENCE_PLACEHOLDER_RE` 同集）剥掉再拼正文
+- **降级到顶部行**：`inlineChipsSupported()`（编辑器在 + 节点类型在）不成立、或插入被编辑器拒绝，面板把 `mode` 切到 `'row'`，退回 0.6.0 的顶部 chip 行（`--dsqe-pad` 预留高度只在 row 模式生效）；切换会话 `resetInlineChips()` 清掉缓存的存在性、`owned` 与失败计数
+- 调试开关：控制台执行 `globalThis.__dsqeDebug = true` 可看到 `[dsqe]` 前缀的 scan / insert / delete 轨迹
 
 ## 依赖的产品内部约定（升级 dsh 后复核）
 
@@ -129,6 +134,9 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 | 气泡出现 JSON | 委托链是否落到宿主视图（宿主/兜底路径会剥块） |
 | 预览面板错位/巨大 | JS 与 CSS 的类名前缀是否一致（连字符 vs 下划线） |
 | 点 chip 没滚到原文 / 提示找不到 | 原文是否在已加载消息里；下划线层是否在 `shell.overlay`（order 90）；拍平索引的块边界（`blockOwnerOf`）是否被新渲染结构打乱 |
+| 引用插出很多枚胶囊 / 顶部行也不消失 | 扫描是否在 update listener 里抛 Lexical #195（读 getter 而非原始字段 `__source`）；插入是否幂等（`owned` 守卫）；控制台开 `__dsqeDebug` 看 insert:threw / insert:placed 次数 |
+| 按 Backspace 删不掉胶囊，反而把段落拆成两段 | 光标是否落在 root 级 element 点（`selectNext` 的老问题）；`watchChipDeletion` 是否注册；是否带了 ⌘/Ctrl/Alt 被放行 |
+| 删掉胶囊后它又自己回来了 | 删除路径是否同时 `removeQuote`（否则面板按「store 有、编辑器没有」补插） |
 | 引用还是显示在输入框顶部一行（不是行内） | 宿主是否还注册 `reference-chip` 节点（`inlineChipsSupported()`）；插入后 `present` 里有没有该 id——任一失败即 `mode='row'` 兜底，看控制台无异常属预期降级 |
 | 行内胶囊删掉了但引用还在 / 反过来 | `registerUpdateListener` 是否绑上（`ensureAttached` 只在 `insertQuoteChip` 时触发）；`seenRef` 记过的 id 才会被删，切换会话后 `resetInlineChips()` 会清空 |
 | 发送出去多出「￼」字符 | `composeMessage` 是否还带 `stripChipPlaceholders`（U+FFFC 来自 chip 的 `getTextContent`） |

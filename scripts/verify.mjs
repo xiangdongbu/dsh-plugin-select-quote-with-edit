@@ -516,6 +516,42 @@ const {
   const tiny = candidateNeedles('短引用')
   check('locate: short quotes keep exactly one candidate', tiny.length === 1 && tiny[0] === '短引用')
   check('locate: empty text never matches', candidateNeedles('   ').length === 0)
+
+  // Underline geometry: `getClientRects()` reports one rect per inline run, so a
+  // line with <code> yields several rects with different tops. They must merge
+  // into ONE underline per visual line (two stacked lines was the 0.7.0 bug).
+  const { linesOf } = locate
+  globalThis.document = { querySelector: () => null }
+  const rect = (left, top, width, height) => ({
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+  })
+  const rangeStub = {
+    startContainer: { isConnected: true },
+    getClientRects: () => [
+      rect(10, 100, 100, 18),
+      rect(110, 101, 60, 20),
+      rect(170, 100, 80, 18),
+      rect(10, 124, 200, 18),
+    ],
+  }
+  const rootStub = { getBoundingClientRect: () => ({ top: 0, bottom: 2000, left: 0, right: 2000 }) }
+  const lines = linesOf({ range: rangeStub, root: rootStub, token: 1 })
+  check(
+    'locate: inline runs of one visual line merge into a single underline',
+    lines.length === 2,
+    JSON.stringify(lines),
+  )
+  check(
+    'locate: the merged underline spans the whole line',
+    Math.round(lines[0].left) === 10 && Math.round(lines[0].width) === 240,
+    JSON.stringify(lines[0]),
+  )
+  delete globalThis.document
 }
 
 // ---------------------------------------------------------------- store tests
@@ -725,6 +761,20 @@ check(
     clientCode.includes('inputTriggers') &&
     clientCode.includes('insertQuoteChip') &&
     clientCode.includes('dsqe-active'),
+)
+check(
+  'inline chips read the raw node fields (no $getNodeByKey outside an update)',
+  clientCode.includes('__source') && clientCode.includes('__ref'),
+)
+check(
+  'Backspace / Delete aimed at a chip removes it whole (capture-phase key handler)',
+  clientCode.includes('watchChipDeletion') &&
+    clientCode.includes('deleteAdjacentChip') &&
+    clientCode.includes('data-composer-card'),
+)
+check(
+  'inline mode never writes the U+200B marker (setDraft rebuilds the paragraphs)',
+  clientCode.includes('mode !== "row"') || clientCode.includes("mode !== 'row'"),
 )
 
 // ---------------------------------------------------------------- withdraw engine

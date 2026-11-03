@@ -9,6 +9,7 @@ import React, {
 import { composerCardOf, isSubmitKey, willSubmit } from './dom.ts'
 import { QuoteChip } from './chip.tsx'
 import {
+  chipPresent,
   inlineChipsSupported,
   insertQuoteChip,
   onChipPresence,
@@ -128,14 +129,41 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
   // The editor publishes which quote ids currently own a chip. A chip deleted
   // with Backspace / Delete simply stops appearing here — that is how removal
   // reaches the store, so a chip and its pending quote never drift apart.
+  // The drop is deferred: a presence set can be one editor state behind (an
+  // editor swap, a mid-commit read), and removing on that stutter would eat a
+  // quote whose chip is still on screen.
   useEffect(() => {
-    return onChipPresence((next) => {
+    const timers = new Map<string, number>()
+    const cancel = (id: string): void => {
+      const timer = timers.get(id)
+      if (timer === undefined) return
+      window.clearTimeout(timer)
+      timers.delete(id)
+    }
+    const off = onChipPresence((next) => {
       presentRef.current = next
       for (const quote of getQuotes()) {
-        if (!next.has(quote.id) && seenRef.current.has(quote.id)) removeQuote(quote.id)
+        if (next.has(quote.id)) {
+          cancel(quote.id)
+          continue
+        }
+        if (!seenRef.current.has(quote.id) || timers.has(quote.id)) continue
+        timers.set(
+          quote.id,
+          window.setTimeout(() => {
+            timers.delete(quote.id)
+            if (chipPresent(quote.id)) return
+            removeQuote(quote.id)
+          }, 220),
+        )
       }
       for (const id of next) seenRef.current.add(id)
     })
+    return () => {
+      off()
+      for (const timer of timers.values()) window.clearTimeout(timer)
+      timers.clear()
+    }
   }, [])
 
   // Session switch rebuilds the editor: neither the chip set nor the
@@ -151,14 +179,24 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
   // one chip, minted at the caret when it arrives.
   useEffect(() => {
     if (mode !== 'inline') return
+    const dbg = (globalThis as { __dsqeDebug?: boolean }).__dsqeDebug === true
+    if (dbg) {
+      console.log('[dsqe] effect', {
+        items: items.map((quote) => quote.id),
+        present: [...presentRef.current],
+        attempts: attemptsRef.current,
+      })
+    }
     for (const quote of items) {
       if (presentRef.current.has(quote.id)) continue
       if (!inlineChipsSupported()) {
         attemptsRef.current += 1
+        if (dbg) console.log('[dsqe] unsupported', attemptsRef.current)
         if (attemptsRef.current > 25) setMode('row')
         return
       }
       if (!insertQuoteChip(quote)) {
+        if (dbg) console.log('[dsqe] insert failed -> row')
         setMode('row')
         return
       }
@@ -212,7 +250,12 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
 
   // Keep the invisible marker in step with the quote list, once per list /
   // draft change. Never write while an IME composition is in flight.
+  //
+  // Inline mode never writes: a chip is real content, so the send button is
+  // already live — and the host's `setDraft` rebuilds the paragraphs from text,
+  // which would wipe every chip. The marker exists for the row fallback only.
   useEffect(() => {
+    if (mode !== 'row') return
     if (composing.current) return
     if (items.length === 0) {
       if (draft.includes(DRAFT_MARKER)) setDraftSafe(stripDraftMarker(draft))
@@ -221,7 +264,7 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
     if (!draft.includes(DRAFT_MARKER) && draft.trim() === '') {
       setDraftSafe(withDraftMarker(draft))
     }
-  }, [items, draft, setDraftSafe])
+  }, [items, draft, mode, setDraftSafe])
 
   // Fold pending quotes into the draft at the send gesture (Enter in the
   // composer, or the primary send button — the last button of the card that

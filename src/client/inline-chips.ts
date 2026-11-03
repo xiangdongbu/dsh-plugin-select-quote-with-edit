@@ -26,7 +26,7 @@
  */
 
 import { chipLabel, CHIP_PLACEHOLDER, type Quote } from './protocol.ts'
-import { getQuotes } from './store.ts'
+import { getQuotes, removeQuote, replaceQuotes } from './store.ts'
 
 /** The host's inline reference node type (see the conversation package). */
 export const CHIP_TYPE = 'reference-chip'
@@ -51,27 +51,51 @@ interface LexicalNode {
   getKey?: () => string
   getSource?: () => string
   getReference?: () => string
+  getTextContent?: () => string
   getTextContentSize?: () => number
   getChildren?: () => LexicalNode[]
   getChildrenSize?: () => number
+  getNextSibling?: () => LexicalNode | null
+  getParent?: () => LexicalNode | null
+  getIndexWithinParent?: () => number
+  getPreviousSibling?: () => LexicalNode | null
   isAttached?: () => boolean
+  remove?: () => void
   splitText?: (offset: number) => LexicalNode[]
+  select?: (anchorOffset: number, focusOffset: number) => void
   insertBefore?: (node: LexicalNode, restoreSelection?: boolean) => void
   insertAfter?: (node: LexicalNode, restoreSelection?: boolean) => void
   append?: (node: LexicalNode) => void
   splice?: (start: number, deleteCount: number, nodes: LexicalNode[]) => void
   selectNext?: (anchorOffset?: number, focusOffset?: number) => void
+  /** Raw chip fields (see ReferenceChipNode): readable without a $ context. */
+  __source?: unknown
+  __ref?: unknown
+  /** Raw text content on a plain Lexical TextNode. */
+  __text?: unknown
+}
+
+/** A collapsed selection point (Lexical `Point`), duck-typed. */
+interface SelectionPoint {
+  key: string
+  offset: number
+  type: string
+  getNode?: () => LexicalNode | null
 }
 
 interface EditorStateLike {
   _nodeMap?: Map<string, LexicalNode>
-  _selection?: { anchor?: { key: string; offset: number; type: string } } | null
+  _selection?: {
+    anchor?: SelectionPoint
+    focus?: SelectionPoint
+  } | null
+  read?: (fn: () => void) => void
 }
 
 interface LexicalEditorLike {
   _editorState?: EditorStateLike
   _pendingEditorState?: EditorStateLike | null
-  _nodes?: Map<string, { klass?: new (insert: ChipInsert) => LexicalNode }>
+  _nodes?: Map<string, { klass?: new (...args: never[]) => LexicalNode }>
   update?: (fn: () => void, options?: { discrete?: boolean }) => void
   getEditorState?: () => EditorStateLike
   getElementByKey?: (key: string) => Element | null
@@ -79,6 +103,13 @@ interface LexicalEditorLike {
 }
 
 type PresenceListener = (present: ReadonlySet<string>) => void
+
+/** Opt-in tracing: set `globalThis.__dsqeDebug = true` in the console. */
+function trace(event: string, data?: unknown): void {
+  const flag = (globalThis as { __dsqeDebug?: boolean }).__dsqeDebug
+  if (flag !== true) return
+  console.log(`[dsqe] ${event}`, data ?? '')
+}
 
 /** The slice of `ctx.inputTriggers` this plugin uses. */
 interface TriggerService {
@@ -90,6 +121,23 @@ const keyOf = new Map<string, string>()
 let attached: { editor: LexicalEditorLike; off: () => void } | null = null
 let present: ReadonlySet<string> = new Set<string>()
 let activeId: string | null = null
+/**
+ * Quote ids this plugin has already placed in the current editor, and ids it
+ * has ever *seen* placed. Together they make insertion idempotent across the
+ * overlay remounting (which resets React state) and across an editor update
+ * that reports a chip we already inserted.
+ */
+const owned = new Set<string>()
+const seenPlaced = new Set<string>()
+/** Per-quote failed-insert counter: two failures means "give up, use the row". */
+const failures = new Map<string, number>()
+/**
+ * Quotes dropped by a chip deletion, keyed by id. `⌘/Ctrl + Z` restores the
+ * chip node but not the store entry; seeing the chip again puts the quote back
+ * so an undone deletion never leaves a chip that sends nothing.
+ */
+const stashed = new Map<string, Quote>()
+const STASH_LIMIT = 20
 
 /** The resident composer's editor instance, reached through its root element. */
 function editorOf(): LexicalEditorLike | null {
@@ -104,10 +152,18 @@ function stateOf(editor: LexicalEditorLike): EditorStateLike | null {
   return editor._pendingEditorState ?? editor._editorState ?? null
 }
 
+/**
+ * The committed state only. A pending state can be mid-update (or a stale
+ * leftover) and would make a chip look deleted for one frame.
+ */
+function committedOf(editor: LexicalEditorLike): EditorStateLike | null {
+  return editor.getEditorState?.() ?? editor._editorState ?? null
+}
+
 function chipClassOf(editor: LexicalEditorLike): (new (insert: ChipInsert) => LexicalNode) | null {
   const entry = editor._nodes?.get?.(CHIP_TYPE)
   const klass = entry?.klass
-  return typeof klass === 'function' ? klass : null
+  return typeof klass === 'function' ? (klass as unknown as new (insert: ChipInsert) => LexicalNode) : null
 }
 
 /** True when this host can host inline chips at all. */
@@ -117,24 +173,92 @@ export function inlineChipsSupported(): boolean {
   return chipClassOf(editor) !== null
 }
 
-function scan(state: EditorStateLike | null): void {
-  const next = new Set<string>()
-  keyOf.clear()
-  const map = state?._nodeMap
-  if (map && typeof map.forEach === 'function') {
-    map.forEach((node) => {
-      if (!node || typeof node.getType !== 'function' || node.getType() !== CHIP_TYPE) return
-      if (typeof node.getSource !== 'function' || node.getSource() !== QUOTE_SOURCE) return
-      const ref = node.getReference?.()
-      if (typeof ref !== 'string' || ref.length === 0) return
-      next.add(ref)
-      const key = node.getKey?.()
-      if (typeof key === 'string') keyOf.set(ref, key)
-    })
+/**
+ * The chip's source name.
+ *
+ * Read the raw field first: `getSource()` goes through `$getNodeByKey`, which
+ * throws Lexical #195 ("unable to find an active editor state") when called
+ * from an update listener — the exact place we read chips. The getter stays as
+ * a fallback for a host that renames its fields.
+ */
+function sourceOf(node: LexicalNode): unknown {
+  if (typeof node.__source === 'string') return node.__source
+  try {
+    return typeof node.getSource === 'function' ? node.getSource() : undefined
+  } catch {
+    return undefined
   }
-  present = next
+}
+
+/** The chip's owner-scoped reference id, read the same defensive way. */
+function refOf(node: LexicalNode): unknown {
+  if (typeof node.__ref === 'string') return node.__ref
+  try {
+    return typeof node.getReference === 'function' ? node.getReference() : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Every quote id that owns a chip in one editor state. */
+function chipRefsOf(state: EditorStateLike | null): { refs: Set<string>; keys: Map<string, string> } {
+  const refs = new Set<string>()
+  const keys = new Map<string, string>()
+  const map = state?._nodeMap
+  if (!map || typeof map.forEach !== 'function') return { refs, keys }
+  map.forEach((node) => {
+    if (!node) return
+    // One unreadable node must never abort the walk — a throwing listener makes
+    // the host swallow the whole commit and our caller misread it as a failed
+    // insert (which is how chips used to pile up).
+    try {
+      if (typeof node.getType === 'function' && node.getType() !== CHIP_TYPE) return
+      if (sourceOf(node) !== QUOTE_SOURCE) return
+      const ref = refOf(node)
+      if (typeof ref !== 'string' || ref.length === 0) return
+      refs.add(ref)
+      const key = node.getKey?.()
+      if (typeof key === 'string') keys.set(ref, key)
+    } catch {
+      // ignore this node
+    }
+  })
+  return { refs, keys }
+}
+
+function scan(state: EditorStateLike | null): void {
+  let found = chipRefsOf(state)
+  // No chip at all: the fields may be private in a newer host, so retry the
+  // getters inside a real `$` context (`read`) before believing the state.
+  if (found.refs.size === 0 && typeof state?.read === 'function') {
+    try {
+      state.read(() => {
+        found = chipRefsOf(state)
+      })
+    } catch {
+      // keep the empty result
+    }
+  }
+  keyOf.clear()
+  for (const [ref, key] of found.keys) keyOf.set(ref, key)
+  // An undone deletion brings the chip node back without the store entry: the
+  // stash puts the quote back so the chip is never a dead end.
+  for (const id of found.refs) {
+    const quote = stashed.get(id)
+    if (quote === undefined) continue
+    stashed.delete(id)
+    if (!getQuotes().some((item) => item.id === id)) replaceQuotes([...getQuotes(), quote])
+  }
+  // A chip that was once placed and is gone now was deleted by the user: the
+  // quote may be inserted again if it ever comes back (withdraw / undo).
+  for (const id of owned) {
+    if (!found.refs.has(id) && seenPlaced.has(id)) owned.delete(id)
+  }
+  for (const id of found.refs) seenPlaced.add(id)
+  present = found.refs
   paintActive()
-  for (const listener of listeners) listener(next)
+  trace('scan', { present: [...found.refs], dom: chipInDom() })
+  for (const listener of listeners) listener(found.refs)
 }
 
 /** Ring the chip whose source text is currently underlined in the transcript. */
@@ -154,10 +278,14 @@ function ensureAttached(): LexicalEditorLike | null {
   const editor = editorOf()
   if (!editor) return null
   if (attached?.editor === editor) return editor
+  trace('attach', {
+    rebind: attached !== null,
+    editors: document.querySelectorAll('[data-lexical-editor="true"]').length,
+  })
   attached?.off()
   const off = editor.registerUpdateListener?.(({ editorState }) => scan(editorState)) ?? (() => {})
   attached = { editor, off }
-  scan(editor.getEditorState?.() ?? stateOf(editor))
+  scan(committedOf(editor))
   return editor
 }
 
@@ -176,26 +304,76 @@ export function setActiveChip(id: string | null): void {
   paintActive()
 }
 
+/**
+ * Ground truth for "this quote still owns a chip right now".
+ *
+ * Used before dropping a pending quote: a presence set can be one state behind
+ * (an editor swap, a mid-commit read), and acting on that would delete a quote
+ * whose chip is perfectly visible.
+ */
+export function chipPresent(id: string): boolean {
+  if (present.has(id)) return true
+  const editor = attached?.editor ?? editorOf()
+  if (!editor) return chipInDom()
+  return chipRefsOf(committedOf(editor)).refs.has(id)
+}
+
 /** Forget cached presence (session switch): the editor content is replaced. */
 export function resetInlineChips(): void {
   present = new Set<string>()
   keyOf.clear()
   activeId = null
+  owned.clear()
+  seenPlaced.clear()
+  failures.clear()
+  stashed.clear()
+}
+
+/** The composer currently shows a chip of ours (ground truth, DOM level). */
+function chipInDom(): boolean {
+  if (typeof document === 'undefined') return false
+  return document.querySelector(`[data-composer-chip="${QUOTE_SOURCE}"]`) !== null
 }
 
 /**
  * Insert one quote chip at the caret as an atomic inline node.
  *
- * Returns false when the host cannot place it (no editor, type not registered,
- * or the edit did not stick), which is the caller's cue to fall back to the
- * chip row. The post-check reads the presence set published by the update
- * listener, so a silently dropped node still counts as a failure.
+ * Idempotent: a quote that already owns a chip (or that this plugin already
+ * placed) is a success without touching the editor again. That guard is what
+ * keeps the caller's retry loop from minting a second, third, hundredth chip
+ * when anything about the editor read-back is unreliable.
+ *
+ * Returns false only when the host cannot place it (no editor, type not
+ * registered, the edit threw) — the caller's cue to fall back to the chip row.
  */
 export function insertQuoteChip(quote: Quote): boolean {
   const editor = ensureAttached()
-  if (!editor) return false
+  if (!editor) {
+    trace('insert:no-editor', quote.id)
+    return false
+  }
+  if (present.has(quote.id) || owned.has(quote.id)) {
+    trace('insert:already', { id: quote.id, present: present.has(quote.id) })
+    owned.add(quote.id)
+    return true
+  }
+  const current = chipRefsOf(committedOf(editor))
+  if (current.refs.has(quote.id)) {
+    trace('insert:found-in-state', quote.id)
+    owned.add(quote.id)
+    present = current.refs
+    return true
+  }
+  const failed = failures.get(quote.id) ?? 0
+  if (failed >= 2) {
+    trace('insert:gave-up', quote.id)
+    return false
+  }
   const Klass = chipClassOf(editor)
-  if (!Klass) return false
+  if (!Klass) {
+    trace('insert:no-class', quote.id)
+    return false
+  }
 
   const insert: ChipInsert = {
     source: QUOTE_SOURCE,
@@ -213,13 +391,25 @@ export function insertQuoteChip(quote: Quote): boolean {
       },
       { discrete: true },
     )
-  } catch {
+  } catch (error) {
+    failures.set(quote.id, failed + 1)
+    trace('insert:threw', String(error))
     return false
   }
-  if (!placed) return false
-  // A node that never reached the document would leave the store ahead of the
-  // editor; treat it as a failure so the caller can fall back.
-  return present.has(quote.id)
+  if (!placed) {
+    failures.set(quote.id, failed + 1)
+    trace('insert:not-placed', quote.id)
+    return false
+  }
+  owned.add(quote.id)
+  failures.delete(quote.id)
+  // Re-read the committed state so presence does not depend on the update
+  // listener alone (it can be dropped when the editor swaps instances).
+  scan(committedOf(editor))
+  const ok = present.has(quote.id) || chipInDom()
+  trace('insert:placed', { id: quote.id, present: [...present], ok })
+  if (!ok) failures.set(quote.id, failed + 1)
+  return ok
 }
 
 /** Runs inside `editor.update`: split the caret text and drop the chip between. */
@@ -275,14 +465,156 @@ function placeChip(
   return false
 }
 
-/** Park the caret just after the fresh chip, then report success. */
+/**
+ * Park the caret just after the fresh chip.
+ *
+ * No trailing filler text: minting a text node here fights Lexical's own
+ * normalization (a throw inside the update rolls the whole insertion back), and
+ * the caret landing on an element point is fine — {@link deleteAdjacentChip}
+ * handles that case explicitly, which is why Backspace still removes the chip.
+ */
 function finish(chip: LexicalNode): boolean {
   try {
-    chip.selectNext?.(0, 0)
-  } catch {
-    // Caret placement is cosmetic; the node itself is what matters.
+    const parent = chip.getParent?.() ?? null
+    const index = chip.getIndexWithinParent?.()
+    // Caret *inside the same paragraph*, right after the chip. `selectNext`
+    // resolves to a root-level element point, which makes Backspace look at the
+    // neighbouring block instead of the chip.
+    if (parent && typeof parent.select === 'function' && typeof index === 'number') {
+      parent.select(index + 1, index + 1)
+    } else {
+      chip.selectNext?.(0, 0)
+    }
+  } catch (error) {
+    trace('finish:threw', String(error))
   }
   return true
+}
+
+/**
+ * The first / last leaf inside a node: an element point can name a whole block,
+ * and the chip we care about is the block's edge child.
+ */
+function edgeLeaf(node: LexicalNode, side: 'first' | 'last'): LexicalNode | null {
+  let current: LexicalNode | null = node
+  for (let depth = 0; depth < 12 && current !== null; depth += 1) {
+    const children: LexicalNode[] = current.getChildren?.() ?? []
+    if (children.length === 0) return current
+    current = side === 'first' ? children[0] : children[children.length - 1]
+  }
+  return current
+}
+
+/**
+ * Delete the chip next to a collapsed caret, the way the user expects.
+ *
+ * Lexical deletes a preceding decorator only when the caret sits inside a text
+ * node; a caret parked on an element point (the natural state right after a
+ * chip at the end of a paragraph) makes Backspace split the paragraph instead.
+ * Rather than depend on that, we look at the caret ourselves: if the neighbour
+ * in the key's direction is *our* chip and there is no character to delete in
+ * between, remove the node whole.
+ *
+ * @param backward - true for Backspace (previous neighbour), false for Delete.
+ * @returns whether a chip was removed (the caller then swallows the key).
+ */
+function deleteAdjacentChip(backward: boolean): boolean {
+  const editor = ensureAttached()
+  if (!editor) return false
+  let removedRef: string | null = null
+  try {
+    editor.update?.(
+      () => {
+        const state = stateOf(editor)
+        const selection = state?._selection
+        const anchor = selection?.anchor
+        const focus = selection?.focus
+        if (!anchor || !focus) return
+        if (anchor.key !== focus.key || anchor.offset !== focus.offset) return
+        const node = anchor.getNode?.() ?? state?._nodeMap?.get(anchor.key) ?? null
+        trace('delete:probe', { type: anchor.type, offset: anchor.offset, node: node && node.getType?.() })
+        if (!node) return
+        let target: LexicalNode | null = null
+        if (anchor.type === 'text') {
+          const text = typeof node.__text === 'string' ? node.__text : ''
+          if (backward) {
+            if (anchor.offset !== 0) return
+            target = node.getPreviousSibling?.() ?? null
+          } else {
+            if (anchor.offset !== text.length) return
+            target = node.getNextSibling?.() ?? null
+          }
+        } else {
+          const children = node.getChildren?.() ?? []
+          const neighbour = backward ? (children[anchor.offset - 1] ?? null) : (children[anchor.offset] ?? null)
+          // A block-level caret points at a paragraph; the chip lives one level
+          // deeper, at the paragraph's first/last leaf.
+          target = neighbour ? edgeLeaf(neighbour, backward ? 'last' : 'first') : null
+        }
+        if (!target) return
+        if (typeof target.getType === 'function' && target.getType() !== CHIP_TYPE) return
+        if (sourceOf(target) !== QUOTE_SOURCE) return
+        const parent = target.getParent?.() ?? null
+        const index = anchor.type === 'text' ? 0 : backward ? anchor.offset - 1 : anchor.offset
+        const ref = refOf(target)
+        target.remove?.()
+        // Re-anchor the caret in the parent: a selection pointing at the removed
+        // node makes Lexical skip the DOM reconciliation for this commit, which
+        // is how a deleted chip used to stay on screen.
+        try {
+          parent?.select?.(Math.max(0, index), Math.max(0, index))
+        } catch {
+          // caret placement is cosmetic
+        }
+        removedRef = typeof ref === 'string' ? ref : null
+      },
+      { discrete: true },
+    )
+  } catch (error) {
+    trace('delete:threw', String(error))
+    return false
+  }
+  if (removedRef === null) return false
+  // Drop the pending quote in the same breath: otherwise the panel sees "quote
+  // in the store, no chip in the editor" and helpfully inserts it right back.
+  const quote = getQuotes().find((item) => item.id === removedRef)
+  if (quote !== undefined) {
+    stashed.set(removedRef, quote)
+    if (stashed.size > STASH_LIMIT) {
+      const oldest = stashed.keys().next().value
+      if (oldest !== undefined) stashed.delete(oldest)
+    }
+  }
+  owned.delete(removedRef)
+  removeQuote(removedRef)
+  trace('delete:removed', removedRef)
+  return true
+}
+
+/**
+ * Swallow Backspace / Delete when it is aimed at one of our chips.
+ *
+ * Capture phase, so the host's own key handling never sees the key for this
+ * case; every other keystroke passes straight through.
+ */
+export function watchChipDeletion(): () => void {
+  if (typeof document === 'undefined') return () => {}
+  const onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key !== 'Backspace' && event.key !== 'Delete') return
+    if (event.metaKey || event.ctrlKey || event.altKey) return
+    const target = event.target
+    const editable = target instanceof HTMLElement && target.isContentEditable
+    trace('key', { key: event.key, editable, inCard: editable || (target instanceof Element && target.closest('[data-composer-card]') !== null) })
+    if (!(target instanceof HTMLElement) || !target.isContentEditable) return
+    if (target.closest('[data-composer-card]') === null) return
+    if (!deleteAdjacentChip(event.key === 'Backspace')) return
+    event.preventDefault()
+    event.stopPropagation()
+  }
+  document.addEventListener('keydown', onKeyDown, true)
+  return () => {
+    document.removeEventListener('keydown', onKeyDown, true)
+  }
 }
 
 /**

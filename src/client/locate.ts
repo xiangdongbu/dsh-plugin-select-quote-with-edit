@@ -363,8 +363,13 @@ export interface SourceLine {
 }
 
 /**
- * Where to paint the underline: one line per client rect, clipped against the
- * transcript viewport so nothing bleeds over the header or the composer.
+ * Where to paint the underline: one line per visual text line, clipped against
+ * the transcript viewport so nothing bleeds over the header or the composer.
+ *
+ * `Range.getClientRects()` reports one rect **per inline run**, so a line that
+ * contains `<code>` or bold text yields several rects with slightly different
+ * tops and heights. Painting one underline each stacks two or three lines on
+ * the same row; cluster them into visual lines and paint the union instead.
  */
 export function linesOf(source: SourceMark): SourceLine[] {
   const range = source.range
@@ -383,7 +388,7 @@ export function linesOf(source: SourceMark): SourceLine[] {
     const card = composer.getBoundingClientRect()
     if (card.top > clip.top) clip.bottom = Math.min(clip.bottom, card.top - 2)
   }
-  const lines: SourceLine[] = []
+  const rects: SourceLine[] = []
   for (const rect of Array.from(range.getClientRects())) {
     if (rect.width <= 0 || rect.height <= 0) continue
     const top = Math.max(rect.top, clip.top)
@@ -392,7 +397,26 @@ export function linesOf(source: SourceMark): SourceLine[] {
     const left = Math.max(rect.left, clip.left)
     const right = Math.min(rect.right, clip.right)
     if (right - left <= 0) continue
-    lines.push({ left, top, width: right - left, height: bottom - top })
+    rects.push({ left, top, width: right - left, height: bottom - top })
+  }
+  // Cluster overlapping rects into one visual line (top-to-bottom, then left).
+  rects.sort((a, b) => a.top - b.top || a.left - b.left)
+  const lines: SourceLine[] = []
+  for (const line of rects) {
+    const last = lines[lines.length - 1]
+    if (
+      last !== undefined &&
+      line.top < last.top + last.height - 2 &&
+      line.top + line.height > last.top + 2
+    ) {
+      const left = Math.min(last.left, line.left)
+      const right = Math.max(last.left + last.width, line.left + line.width)
+      const top = Math.min(last.top, line.top)
+      const bottom = Math.max(last.top + last.height, line.top + line.height)
+      lines[lines.length - 1] = { left, top, width: right - left, height: bottom - top }
+      continue
+    }
+    lines.push({ ...line })
   }
   return lines
 }
