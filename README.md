@@ -94,7 +94,8 @@ cp dev.patch.example.yml dev.patch.yml   # 把 <CHECKOUT> 改成本仓库的绝�
 dsh web --patch "$PWD/dev.patch.yml"
 ```
 
-已装进桌面 profile 时，`npm run sync:desktop` 可热更新。
+已装进桌面 profile 时，`npm run sync:desktop` 可热更新（`lib/` 推过去触发重载，
+同时把 `package.json` / `locale` / `README` 等包文件一并对齐，免得副本还停在旧版本号）。
 
 ## 本地验证
 

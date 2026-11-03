@@ -8,7 +8,7 @@
  *
  * 前提：插件已安装到 <DSH_HOME>/profiles/<profile>/node_modules/<包名>。
  */
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -53,6 +53,22 @@ function bundleFiles() {
   return readdirSync(libDir).filter((name) => statSync(join(libDir, name)).isFile())
 }
 
+/**
+ * lib/ 之外的包文件：不给它们做同步的话，已安装副本会一直停在旧版本号和旧
+ * 文案上（`lib/client.js` 是新的，`package.json` 还写着上一版），排查问题时
+ * 特别容易看错版本。这些文件不需要热重载，只在有差异时覆盖一次。
+ */
+function sidecarFiles() {
+  const single = ['package.json', 'cordis.patch.yml', 'icon.svg', 'LICENSE', 'README.md']
+  const localeDir = resolve(root, 'locale')
+  const locale = existsSync(localeDir)
+    ? readdirSync(localeDir)
+        .filter((name) => name.endsWith('.json') && statSync(join(localeDir, name)).isFile())
+        .map((name) => join('locale', name))
+    : []
+  return [...single, ...locale].filter((name) => existsSync(resolve(root, name)))
+}
+
 function bundleSignature() {
   return bundleFiles()
     .map((name) => {
@@ -76,9 +92,27 @@ function sync() {
   return written
 }
 
+function syncSidecars() {
+  const written = []
+  for (const name of sidecarFiles()) {
+    const source = resolve(root, name)
+    const target = join(installedDir, name)
+    if (existsSync(target) && readFileSync(target).equals(readFileSync(source))) continue
+    mkdirSync(dirname(target), { recursive: true })
+    writeFileSync(target, readFileSync(source))
+    written.push(name)
+  }
+  return written
+}
+
 const first = sync()
-if (first.length === 0) log(`profile "${profile}" bundle already matches ${libDir}`)
-else log(`synced ${first.join(', ')} -> ${targetDir}`)
+const firstSidecars = syncSidecars()
+if (first.length === 0 && firstSidecars.length === 0) {
+  log(`profile "${profile}" already matches ${root} (v${pkg.version})`)
+} else {
+  if (first.length > 0) log(`synced ${first.join(', ')} -> ${targetDir}`)
+  if (firstSidecars.length > 0) log(`synced ${firstSidecars.join(', ')} -> ${installedDir} (v${pkg.version})`)
+}
 
 if (!watch) process.exit(0)
 
@@ -89,6 +123,7 @@ const timer = setInterval(() => {
   if (next === signature) return
   signature = next
   const written = sync()
+  syncSidecars()
   if (written.length > 0) log(`pushed ${written.join(', ')} — the plugin reloads`)
 }, 300)
 
