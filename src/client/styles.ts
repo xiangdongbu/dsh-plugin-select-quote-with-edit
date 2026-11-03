@@ -39,7 +39,7 @@ body {
   --dsqe-json-num: #953800;
   --dsqe-json-lit: #8250df;
   --dsqe-src-line: rgba(37, 99, 235, 0.85);
-  --dsqe-src-bg: rgba(37, 99, 235, 0.09);
+  --dsqe-src-bg: rgba(37, 99, 235, 0.06);
 }
 body[data-ds-dark-theme] {
   --dsqe-label: #f0f0f2;
@@ -60,7 +60,7 @@ body[data-ds-dark-theme] {
   --dsqe-json-num: #ffa657;
   --dsqe-json-lit: #d2a8ff;
   --dsqe-src-line: rgba(138, 180, 255, 0.9);
-  --dsqe-src-bg: rgba(138, 180, 255, 0.15);
+  --dsqe-src-bg: rgba(138, 180, 255, 0.08);
 }
 
 /* ---------- 消息行标记（悬停 chrome / 编辑器的定位上下文） ---------- */
@@ -197,15 +197,17 @@ body[data-ds-dark-theme] {
 
 /* ---------- 「定位原文」下划线层 ---------- */
 /* Painted over the message, never inside it: one fixed line per client rect of
-   the located Range. Inset shadow = the underline itself, sitting on the text
-   baseline; the faint fill makes a long span readable at a glance. */
+   the located Range. A dashed bottom border reads as a reference mark (a solid
+   one looks like a hyperlink or a text selection); the faint fill shows how far
+   a long multi-line quote runs. */
 .dsqe-srcMark {
   position: fixed;
   z-index: 40;
+  box-sizing: border-box;
   pointer-events: none;
-  border-radius: 3px;
+  border-radius: 2px;
+  border-bottom: 2px dashed var(--dsqe-src-line);
   background: var(--dsqe-src-bg);
-  box-shadow: inset 0 -2px 0 var(--dsqe-src-line);
   animation: dsqe-src-in 0.2s ease-out;
 }
 @keyframes dsqe-src-in {
