@@ -164,6 +164,15 @@ export function bindSession(id: string | undefined): void {
 export function addQuote(text: string, options?: { long?: boolean }): Quote | null {
   const trimmed = text.trim()
   if (!trimmed) return null
+  // One chip per distinct content: a repeated add (paste the same long text
+  // twice, a payload that carries a quote again) must return the existing
+  // quote instead of minting a twin. Without this, repeated pastes used to
+  // pile up identical quotes that all materialized at once as a wall of
+  // duplicate chips.
+  const existing = current().find(
+    (quote) => quote.text === trimmed && (quote.long === true) === (options?.long === true),
+  )
+  if (existing) return existing
   const quote: Quote = {
     id: `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     text: trimmed,

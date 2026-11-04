@@ -950,6 +950,21 @@ check(
     /typeof\s+\w+\s*===?\s*["']string["']/.test(clientCode) &&
     clientCode.includes('.then('),
 )
+check(
+  'mark materialization handles a mark that is its own text node',
+  // A pasted mark lands alone in its own text node; splitText(1) has no
+  // remainder there, the swap used to fail silently and the stranded mark
+  // froze the insertion effect while quotes piled up behind it.
+  clientCode.includes('head-solo') && clientCode.includes('removeMarkBestEffort'),
+)
+check(
+  'materialize counts leftover marks instead of trusting the swap loop',
+  clientCode.includes('marks:leftover'),
+)
+check(
+  'addQuote dedupes identical content instead of minting twins',
+  /\w+\.text\s*===\s*trimmed/.test(clientCode),
+)
 
 // ---------------------------------------------------------------- withdraw engine
 {

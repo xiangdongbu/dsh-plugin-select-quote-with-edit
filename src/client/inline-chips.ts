@@ -515,6 +515,42 @@ function markNodes(
 }
 
 /**
+ * Delete one mark character from `node` without leaving a trace. Last-resort
+ * cleanup for a failed swap: a leftover mark is invisible to the user but
+ * keeps {@link hasRestoreMarks} true forever, which freezes the panel's
+ * insertion effect and piles every pending quote up behind it. Best effort —
+ * when even this cannot cut the character out, the whole node goes.
+ */
+function removeMarkBestEffort(node: LexicalNode, offset: number): void {
+  try {
+    const text = String(node.__text ?? '')
+    if (text.length <= 1) {
+      node.remove?.()
+      return
+    }
+    if (offset === 0) {
+      const parts = node.splitText?.(1) ?? []
+      parts[0]?.remove?.()
+      return
+    }
+    const [head, tail] = node.splitText?.(offset) ?? []
+    if (!tail) {
+      node.remove?.()
+      return
+    }
+    const parts = typeof tail.splitText === 'function' ? tail.splitText(1) : []
+    parts[0]?.remove?.()
+    void head
+  } catch {
+    try {
+      node.remove?.()
+    } catch {
+      // nothing more to try
+    }
+  }
+}
+
+/**
  * Replace the mark character at `offset` with `chip`, keeping the text around
  * it, and return the node that now holds the remainder (so a second mark in
  * the same text node can be handled with a valid cursor).
@@ -522,6 +558,7 @@ function markNodes(
 function swapMarkForChip(node: LexicalNode, offset: number, chip: LexicalNode | null): LexicalNode | null {
   if (typeof node.splitText !== 'function') {
     trace('swap:no-split', escapeMarks(String(node.__text ?? '')))
+    removeMarkBestEffort(node, offset)
     return null
   }
   const source = escapeMarks(String(node.__text ?? ''))
@@ -529,11 +566,23 @@ function swapMarkForChip(node: LexicalNode, offset: number, chip: LexicalNode | 
   // remainder), so a mark sitting at the head of a text node is cut off from
   // the other end instead.
   if (offset === 0) {
+    // A node that IS the mark — the pasted-mark case, where the character
+    // lands alone in its own text node — cannot be split at all: there is no
+    // remainder to cut towards. Replace the node in place. (This used to fall
+    // into the generic head branch, fail on the missing remainder, and strand
+    // the quote behind an invisible mark that blocked every later insert.)
+    if (String(node.__text ?? '').length === 1) {
+      if (chip !== null) node.insertBefore?.(chip)
+      node.remove?.()
+      trace('swap:ok', { offset, chip: chip !== null, mode: 'head-solo', rest: '' })
+      return null
+    }
     const parts = typeof node.splitText === 'function' ? node.splitText(1) : []
     const mark = parts[0] ?? null
     const rest = parts[1] ?? null
     if (mark === null || rest === null) {
       trace('swap:head-failed', { offset, text: source })
+      removeMarkBestEffort(node, 0)
       return null
     }
     if (chip !== null) rest.insertBefore?.(chip)
@@ -544,6 +593,7 @@ function swapMarkForChip(node: LexicalNode, offset: number, chip: LexicalNode | 
   const [head, tail] = node.splitText(offset)
   if (!tail) {
     trace('swap:no-tail', { offset, text: source })
+    removeMarkBestEffort(node, offset)
     return null
   }
   const parts = typeof tail.splitText === 'function' ? tail.splitText(1) : []
@@ -551,6 +601,7 @@ function swapMarkForChip(node: LexicalNode, offset: number, chip: LexicalNode | 
   const rest = parts[1] ?? null
   if (mark === null) {
     trace('swap:mark-failed', { offset, text: source })
+    removeMarkBestEffort(node, offset)
     return null
   }
   if (chip !== null && head && typeof head.insertAfter === 'function') {
@@ -635,6 +686,22 @@ export function materializeQuoteMarks(ids: readonly string[]): boolean {
   // own normalization): drop them now, or Backspace spends its first presses
   // on characters the user cannot see.
   tidyFillers()
+  // Honest bookkeeping: count the marks that actually remain in the tree. A
+  // failed swap used to be counted as placed, which stranded its quote behind
+  // an invisible mark — and with a mark stuck in the draft, hasRestoreMarks()
+  // froze the panel's insertion effect, so repeated pastes piled up orphan
+  // quotes that all came out at once later (the wall of duplicate chips).
+  const committedState = stateOf(editor)
+  const committedMap = committedState?._nodeMap
+  const committedRoot = committedMap?.get?.('root') ?? null
+  const leftover =
+    committedRoot && committedMap
+      ? markNodes(committedRoot, committedMap).reduce((total, entry) => total + entry.offsets.length, 0)
+      : 0
+  if (leftover > 0) {
+    placed = Math.max(0, placed - leftover)
+    trace('marks:leftover', { leftover })
+  }
   trace('marks:placed', { placed, dropped, seen, present: [...present] })
   for (const id of ids) {
     if (present.has(id)) owned.add(id)
