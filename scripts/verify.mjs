@@ -925,6 +925,22 @@ check(
   'tidyFillers removes invisible U+200Bs so Backspace never dead-presses',
   clientCode.includes('tidyFillers') && clientCode.includes('reuse-next'),
 )
+check(
+  'composer wheel stays local: capture guard stops the host transcript forwarding',
+  // The host assigns the transcript scrollTop from its own onWheel once the
+  // composer hits an edge — CSS overscroll-behavior cannot block that. The
+  // guard must sit at document level in the capture phase (which runs before
+  // any listener on the transcript scroller) and only while the composer has
+  // its own scrollbar.
+  clientCode.includes('wheelGuard') &&
+    /addEventListener\(["']wheel["'],\s*wheelGuard/.test(clientCode) &&
+    clientCode.includes('capture: true') &&
+    clientCode.includes('overscrollBehavior'),
+)
+check(
+  'wheel guard lets the host forward when the composer has no overflow',
+  clientCode.includes('scrollHeight <= area.clientHeight'),
+)
 
 // ---------------------------------------------------------------- withdraw engine
 {

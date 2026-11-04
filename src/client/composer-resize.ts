@@ -62,6 +62,52 @@ export function composerScrollAreaOf(card: HTMLElement): HTMLElement | null {
   return editor
 }
 
+/**
+ * Keep composer scrolling local. With long input the editor area scrolls on
+ * its own; without this, the moment it reaches an edge the wheel keeps
+ * chaining into the transcript underneath (the page scrolls along with the
+ * composer). `contain` stops the chaining while leaving the area's own
+ * scrolling untouched.
+ *
+ * The host assembles the card in two passes — the shell first, the editor and
+ * its scroll wrapper later — so this re-runs on inner DOM changes and re-pins
+ * whenever a (re)built scroll area shows up. A persisted height rides along,
+ * because it belongs to the area that just got replaced.
+ */
+const lastAreaOf = new WeakMap<HTMLElement, HTMLElement>()
+
+function keepScrollLocal(card: HTMLElement): void {
+  const area = composerScrollAreaOf(card)
+  if (!area) return
+  if (area === lastAreaOf.get(card) && area.style.overscrollBehavior === 'contain') return
+  area.style.overscrollBehavior = 'contain'
+  lastAreaOf.set(card, area)
+  const saved = readSaved()
+  if (saved !== null) applyComposerHeight(card, saved)
+}
+
+/**
+ * The host forwards wheel events to the transcript itself: an `onWheel`
+ * listener on the transcript scroller assigns `scrollTop` directly once the
+ * composer can't consume the delta, so `overscroll-behavior: contain` (which
+ * only stops native chaining) is not enough — the transcript scrolled along
+ * with the composer anyway. While the composer has its own scrollbar, the
+ * wheel must stay local: swallow the event in the capture phase at document
+ * level, which always runs before any listener the host keeps on the
+ * transcript scroller. When the composer has no overflow there is nothing to
+ * keep local, and the host's forwarding stays the desired behavior.
+ */
+function wheelGuard(event: WheelEvent): void {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const card = target.closest<HTMLElement>(COMPOSER_CARD)
+  if (card === null) return
+  const area = composerScrollAreaOf(card)
+  if (area === null) return
+  if (area.scrollHeight <= area.clientHeight + 1) return
+  event.stopPropagation()
+}
+
 /** Set the editor height (clamped); returns the applied value, 0 = no area. */
 export function applyComposerHeight(card: HTMLElement, height: number): number {
   const area = composerScrollAreaOf(card)
@@ -70,6 +116,7 @@ export function applyComposerHeight(card: HTMLElement, height: number): number {
   area.style.height = `${clamped}px`
   area.style.maxHeight = `${clamped}px`
   area.style.overflowY = 'auto'
+  area.style.overscrollBehavior = 'contain'
   return clamped
 }
 
@@ -80,10 +127,18 @@ export function resetComposerHeight(card: HTMLElement): void {
   area.style.removeProperty('height')
   area.style.removeProperty('max-height')
   area.style.removeProperty('overflow-y')
+  // Clear the saved height BEFORE keepScrollLocal: it re-applies a persisted
+  // height when it discovers a (re)built scroll area, which would resurrect
+  // the height this call is meant to forget.
   save(null)
+  lastAreaOf.delete(card)
+  keepScrollLocal(card)
 }
 
 function ensureHandle(card: HTMLElement): void {
+  // Runs repeatedly for the same card (the host fills its shell in later), so
+  // everything below the handle creation must be idempotent.
+  keepScrollLocal(card)
   if (card.querySelector(`.${HANDLE_CLASS}`)) return
   card.classList.add(CARD_CLASS)
   const handle = document.createElement('div')
@@ -138,11 +193,17 @@ function scan(root: Element): void {
 
 /** Decorate every composer card (now and as they appear). Returns a dispose. */
 export function watchComposerResize(): () => void {
+  document.addEventListener('wheel', wheelGuard, { capture: true, passive: true })
   const observer = new MutationObserver((records) => {
     for (const record of records) {
       for (const node of record.addedNodes) {
         if (!(node instanceof Element)) continue
-        if (node.matches(COMPOSER_CARD)) ensureHandle(node as HTMLElement)
+        // The host builds the card shell first and drops the editor into it
+        // afterwards: added nodes INSIDE an existing card must re-run the
+        // decoration too (the scroll wrapper shows up that way), not just
+        // whole new cards.
+        const owner = node.closest<HTMLElement>(COMPOSER_CARD)
+        if (owner !== null) ensureHandle(owner)
         else scan(node)
       }
     }
@@ -152,5 +213,8 @@ export function watchComposerResize(): () => void {
     observer.observe(root, { childList: true, subtree: true })
     scan(root)
   }
-  return () => observer.disconnect()
+  return () => {
+    document.removeEventListener('wheel', wheelGuard, { capture: true })
+    observer.disconnect()
+  }
 }

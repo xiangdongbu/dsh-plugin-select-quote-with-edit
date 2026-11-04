@@ -127,6 +127,7 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
   ② `chip-clipboard` 的 `emitText` 现在剥掉 `[\u200b\ufeff]`——全选复制时正文里的填充符跟着进了剪贴板，粘贴回来它们就成了正文的一部分，删到最后才现形
   ③ `tidyFillers()`：正文（非零宽字符）存在时把树里所有 U+200B 清干净——独立填充节点直接 `remove()`，混在正文里的零宽串用 `splitText` 切出来再删；**只有胶囊没有正文**时保留恰好一个（发送键靠它可用）。它在两处同步运行：`materializeQuoteMarks` 收尾（粘贴 / 撤回回填），以及 `watchChipDeletion` 的 Backspace/Delete keydown 里（都在手势内同步，挂到 `setTimeout` 会被宿主吞）
   ④ **粘贴替换选区时的孤儿 quote**：`paste.ts` 接管粘贴（marker 路径 / 长文本路径）会 `preventDefault` 后走 `execCommand('insertText')`——但 `execCommand` **不触发 `beforeinput`**（headless 实测，连宿主的输入路径都不走），选区里原有胶囊被宿主删掉却没人通知 store，面板的兜底插入循环就把孤儿 quote 补成多余的胶囊。现在两个粘贴分支动手前都先 `removeChipsInSelection()`（导出自 `inline-chips`，复用 `removeChipsByRef` 的「删节点 + 移 quote + 撤回 stash」全套）
+- **输入框滚动不外溢（0.7.7+）**：输入框文字长了出现滚动条后，滚到顶/底再滚，**正文跟着滚**。排查链路很绕：`overscroll-behavior: contain` 挂到滚动容器（`composer-resize.ts` 的 `composerScrollAreaOf` 能找到它）后用真实滚轮探针测，正文照样动——但合成 `WheelEvent`（不触发原生滚动）却滚不动正文，最小化嵌套页面里 `contain` 又完全正常。最后给所有滚动容器的 `scrollTop` setter 上探针抓调用栈，真凶现形：**宿主在正文滚动容器上挂了自己的 `onWheel`，输入框到边界后它直接 `scrollTop = ...` 手动滚正文**——JS 赋值不走滚动链，CSS 拦不住。修法是 document 捕获阶段的 `wheelGuard`：目标在 composer 卡片内**且滚动容器确实可滚**（`scrollHeight > clientHeight`）时 `stopPropagation()`——捕获阶段的 document 监听永远先于宿主挂在正文容器上的任何监听执行；输入框没有溢出时不拦，保留宿主「滚输入框转发正文」的原生体验。`contain` 仍保留作原生链式滚动的纵深防御。另外 `keepScrollLocal` 改为幂等重入：宿主「先插卡片外壳、后填编辑器」，`ensureHandle` 首跑时滚动容器还不存在，必须靠观察器在内层 DOM 变化时重跑（持久化高度也跟着补挂到新容器上）
 
 ## 依赖的产品内部约定（升级 dsh 后复核）
 
