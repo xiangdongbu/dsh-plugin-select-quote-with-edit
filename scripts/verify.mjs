@@ -941,6 +941,15 @@ check(
   'wheel guard lets the host forward when the composer has no overflow',
   clientCode.includes('scrollHeight <= area.clientHeight'),
 )
+check(
+  'quote bubble thumbnails resolve the host loadImage promise',
+  // The host's loadImage returns a promise for the blob URL; assigning it to
+  // src directly produced a literal "[object Promise]" and the attachment
+  // thumbnail never rendered on sent quote bubbles.
+  clientCode.includes('AttachmentImage') &&
+    /typeof\s+\w+\s*===?\s*["']string["']/.test(clientCode) &&
+    clientCode.includes('.then('),
+)
 
 // ---------------------------------------------------------------- withdraw engine
 {

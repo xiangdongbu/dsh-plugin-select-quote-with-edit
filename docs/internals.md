@@ -128,6 +128,8 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
   ③ `tidyFillers()`：正文（非零宽字符）存在时把树里所有 U+200B 清干净——独立填充节点直接 `remove()`，混在正文里的零宽串用 `splitText` 切出来再删；**只有胶囊没有正文**时保留恰好一个（发送键靠它可用）。它在两处同步运行：`materializeQuoteMarks` 收尾（粘贴 / 撤回回填），以及 `watchChipDeletion` 的 Backspace/Delete keydown 里（都在手势内同步，挂到 `setTimeout` 会被宿主吞）
   ④ **粘贴替换选区时的孤儿 quote**：`paste.ts` 接管粘贴（marker 路径 / 长文本路径）会 `preventDefault` 后走 `execCommand('insertText')`——但 `execCommand` **不触发 `beforeinput`**（headless 实测，连宿主的输入路径都不走），选区里原有胶囊被宿主删掉却没人通知 store，面板的兜底插入循环就把孤儿 quote 补成多余的胶囊。现在两个粘贴分支动手前都先 `removeChipsInSelection()`（导出自 `inline-chips`，复用 `removeChipsByRef` 的「删节点 + 移 quote + 撤回 stash」全套）
 - **输入框滚动不外溢（0.7.7+）**：输入框文字长了出现滚动条后，滚到顶/底再滚，**正文跟着滚**。排查链路很绕：`overscroll-behavior: contain` 挂到滚动容器（`composer-resize.ts` 的 `composerScrollAreaOf` 能找到它）后用真实滚轮探针测，正文照样动——但合成 `WheelEvent`（不触发原生滚动）却滚不动正文，最小化嵌套页面里 `contain` 又完全正常。最后给所有滚动容器的 `scrollTop` setter 上探针抓调用栈，真凶现形：**宿主在正文滚动容器上挂了自己的 `onWheel`，输入框到边界后它直接 `scrollTop = ...` 手动滚正文**——JS 赋值不走滚动链，CSS 拦不住。修法是 document 捕获阶段的 `wheelGuard`：目标在 composer 卡片内**且滚动容器确实可滚**（`scrollHeight > clientHeight`）时 `stopPropagation()`——捕获阶段的 document 监听永远先于宿主挂在正文容器上的任何监听执行；输入框没有溢出时不拦，保留宿主「滚输入框转发正文」的原生体验。`contain` 仍保留作原生链式滚动的纵深防御。另外 `keepScrollLocal` 改为幂等重入：宿主「先插卡片外壳、后填编辑器」，`ensureHandle` 首跑时滚动容器还不存在，必须靠观察器在内层 DOM 变化时重跑（持久化高度也跟着补挂到新容器上）
+- **引用气泡的图片缩略图（0.7.8+）**：带引用/长文本胶囊的消息粘贴图片后发送，气泡上看不到缩略图（无胶囊时宿主自己的视图渲染正常）。图片**其实已随消息到达模型**——丢的只是我们自己 `UserMessageView` 引用分支里的缩略图渲染：宿主传入的 `loadImage(attachment)` 返回的是 **Promise**（blob/object URL 是异步解析的），直接把返回值塞进 `<img src>` 得到字面量 `"[object Promise]"`，加载必然失败。修法是 `AttachmentImage` 组件：同时接受同步字符串与 Promise，resolve 后再渲染 `<img>`；卸载时置 `alive` 防止晚到的 setState。这个 prop 的返回类型契约要写进「依赖的产品内部约定」里复核：`loadImage` 可能同步返回 `string | undefined`，也可能返回 `Promise<string | undefined>`
+- **带图消息 + 胶囊的发送路径本身没问题**：折叠 `inject()` → 宿主 `setDraft`（实测**不清附件**，探针单独验证过）→ 宿主提交，附件块（`content` 里 `type:"image"` 的 block）原样随消息走；变体实验（图前加胶囊 / 长文本胶囊 + 图）模型都收到了 `probe.png`。只有回显渲染这一层丢图
 
 ## 依赖的产品内部约定（升级 dsh 后复核）
 
@@ -137,6 +139,7 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 - 行内胶囊：根元素上的 `__lexicalEditor`（`update` / `_nodes` / `_nodeMap` / `_selection` / `registerUpdateListener` / `getElementByKey`）、节点类型 `reference-chip`（构造参数 `{source, ref, label, appearance, clipboardText}`、`getSource()` / `getReference()`）、chip 在剪贴板投影里占 U+FFFC、占位符正则 `/[\uE100-\uE11D\uFFFC]/gu`；另外：`_nodes.get('text')` / `_nodes.get('paragraph')` 的 `klass`（可以直接 `new`，但空文本节点会被拒）、root 只接受 block 子节点（`rootNode.splice` 收到文本节点即 #282）；
 - `ctx.get('inputTriggers').registerSource({ trigger, name, codec: { clipboardText, serialize }, openReference })`：未注册 source 的胶囊活到提交会让整条消息 reject；
 - 槽位 `shell.overlay` / `conversation.input.overlay`（props 带 `useInput`、`inputActions.setDraft`）/ `conversation.chat.node`（user/steering）；
+- 聊天节点视图 props：`loadImage(attachment)` 返回 `string | undefined` **或 `Promise<string | undefined>`**（0.7.8 实测是 Promise——同步当字符串用会渲染成 `"[object Promise]"`）；用户消息 `content` 里的图片是 `{type:'image', attachment:{attachmentId, mediaType, name?}}` 块；
 - `ctx.locale.register/bind`；`ctx.slots.inject/register/entries`；
 - `ctx.get('sessions')` / `ctx.get('uiConversation')`（撤回定位 seq 与发命令用）；`sessions.binding(id).session.command(line)`；
 - `dsh-rewind-plugin` 的内部命令 `/rewind-plugin @<seq> both`、其 Client 可见性遮蔽、以及它自带按钮的类名 `dsh-rewind-btn`（用于隐藏，避免重复入口）；

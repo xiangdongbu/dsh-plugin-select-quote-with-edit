@@ -134,6 +134,11 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
   // fold before the draft lands (see chrome.ts sendEdit).
   useEffect(() => {
     if (!inputActions) return
+    // Debug affordance (probes set __dsqeDebug): expose the host's composer
+    // actions so headless tests can drive setDraft / addAttachments directly.
+    if ((globalThis as { __dsqeDebug?: boolean }).__dsqeDebug === true) {
+      ;(globalThis as { __dsqeInputActions?: unknown }).__dsqeInputActions = inputActions
+    }
     runtime.markFolded = (): void => {
       foldingRef.current = true
     }

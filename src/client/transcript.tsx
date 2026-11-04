@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useRef } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { scanQuotes, type ParsedQuote } from './protocol.ts'
 import { QuoteChip, type QuoteLike } from './chip.tsx'
 import { openDetail } from './detail.tsx'
@@ -84,6 +84,47 @@ function openChip(quote: ParsedQuote, index: number): void {
     return
   }
   locateQuote(quote.text, `${quote.id}-${index}`)
+}
+
+/**
+ * One attachment thumbnail. The host's `loadImage` resolves asynchronously
+ * (it returns a promise for the blob/object URL — assigning it to `src`
+ * directly yields a literal `[object Promise]` and the image never loads,
+ * which is exactly why quote bubbles used to show no images). Accept both a
+ * plain URL and a promise, and re-render once it settles.
+ */
+function AttachmentImage(props: {
+  attachment: unknown
+  loadImage: (attachment: unknown) => string | undefined | Promise<string | undefined>
+}): React.ReactNode {
+  const { attachment, loadImage } = props
+  const [url, setUrl] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    let alive = true
+    setUrl(undefined)
+    let result: string | undefined | Promise<string | undefined>
+    try {
+      result = loadImage(attachment)
+    } catch {
+      return
+    }
+    if (result === undefined) return
+    if (typeof result === 'string') {
+      setUrl(result)
+      return
+    }
+    result
+      .then((resolved) => {
+        if (alive && typeof resolved === 'string') setUrl(resolved)
+      })
+      .catch(() => {
+        // no thumbnail for this attachment
+      })
+    return () => {
+      alive = false
+    }
+  }, [attachment, loadImage])
+  return url === undefined ? null : <img src={url} alt="" />
 }
 
 /**
@@ -239,12 +280,9 @@ export function UserMessageView(
         <div className="dsqe-userStack" data-dsqe-quote-bubble="true">
           {images.length > 0 && loadImage !== undefined ? (
             <div className="dsqe-userImages" data-message-attachments="true">
-              {images.map((attachment, index) => {
-                const url = loadImage(attachment)
-                return url === undefined ? null : (
-                  <img key={`image-${index}`} src={url} alt="" />
-                )
-              })}
+              {images.map((attachment, index) => (
+                <AttachmentImage key={`image-${index}`} attachment={attachment} loadImage={loadImage} />
+              ))}
             </div>
           ) : null}
           <div className="dsqe-bubble">
