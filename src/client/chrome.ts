@@ -21,7 +21,6 @@ import { chipLabel, composeMessage, scanQuotes, type Quote } from './protocol.ts
 import { runtime } from './runtime.ts'
 import { copyRich, escapeHtml } from './dom.ts'
 import { ensureStyles } from './styles.ts'
-import { ensureGhostObserver, ghostWithdrawnTurn, previewOfWire } from './turn-ghost.ts'
 import { SVG_PENCIL, SVG_COPY, SVG_CHECK, SVG_INFO, SVG_QUOTE, SVG_CLIP, SVG_X, SVG_UNDO } from './svg.ts'
 
 const FLOW_ITEM = '[data-chat-flow-key]'
@@ -326,17 +325,11 @@ async function withdrawRow(row: HTMLElement): Promise<void> {
   if (dbg) console.log('[dsqe] withdraw:done', outcome)
   if (!outcome.ok) showUndoHint(t('undo.failed'))
   // The host's turnOutline projection is a whole-log fold that never learns
-  // about the rewind's surface marker, so the withdrawn turn stays in the
-  // turn-navigation rail forever. Record the rail preview of the withdrawn
-  // message and keep its mark hidden (turn-ghost.ts).
-  if (outcome.ok) {
-    const sessionId = runtime.sessionId
-    const entry = getMessage(flowKey)
-    if (sessionId !== null && entry !== undefined && entry.raw !== '') {
-      ensureGhostObserver()
-      ghostWithdrawnTurn(sessionId, previewOfWire(entry.raw))
-    }
-  }
+  // about the rewind's shadow marker, so the withdrawn turn stays in the
+  // turn-navigation rail forever. The rewind plugin marks the shadowed rows
+  // `visibility: 'hidden'` in the chat snapshot and every row carries its
+  // `location.turn.turn` — re-scan and hide that turn's mark (turn-ghost.ts).
+  if (outcome.ok) runtime.syncGhosts?.()
 }
 
 function showActions(row: HTMLElement): void {

@@ -45,6 +45,12 @@ export const runtime: {
   pinTitle:
     | ((raw: string, seq: number | undefined, time: number | undefined, isFirst: boolean) => void)
     | null
+  /**
+   * Re-scan the chat snapshot for withdrawn (hidden) turns and hide their rail
+   * marks (turn-ghost.ts). Published by the bridge, which owns the snapshot
+   * accessor; the plain-DOM chrome calls it right after a successful withdraw.
+   */
+  syncGhosts: (() => void) | null
 } = {
   inputActions: null,
   markFolded: null,
@@ -53,4 +59,5 @@ export const runtime: {
   withdraw: null,
   detailOpener: null,
   pinTitle: null,
+  syncGhosts: null,
 }

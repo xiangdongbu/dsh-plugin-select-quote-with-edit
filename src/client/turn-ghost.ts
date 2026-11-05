@@ -3,42 +3,55 @@
  *
  * 宿主的 `turnOutline` projection 是全日志的纯折叠（只认 turn/start、
  * user/message、assistant/message、turn/end 四种事件），不知道撤回插件
- * 追加的面遮蔽标记——被撤回的轮次永远留在概览条里（变 `markUnloaded`，
- * 「加载并跳转」过去也只有被遮蔽的空行）。宿主侧不可改，只能在客户端
- * 把对应的标记按钮藏掉。
+ * 追加的遮蔽标记。rail 的 items = outline ∪ 已加载轮次，而
+ * `turnNavigationItem` 会用 `isVisibleChatNode` 把整轮被遮蔽的项剔掉 ——
+ * 于是被撤回的轮次只剩 outline 那一份，永远留在概览条上（还是
+ * `markUnloaded`，「加载并跳转」过去也只有空行）。宿主侧不可改，只能在
+ * 客户端把对应的标记按钮藏掉。
  *
- * 定位被撤回轮次的方法：概览条的悬停预览（`role=tooltip`）显示该轮的
- * prompt 预览文本，宿主用与 `dsh-session-turn-outline` 相同的 preview
- * 算法从消息文本块计算。撤回成功后我们知道被撤回消息的 wire 文本，
- * 按同一算法算出预览并**记账待匹配**；rail 任何时刻出现（撤回当下、
- * 切会话回来、刷新）都在 observer 节流循环里逐个悬停标记按钮、比对
- * tooltip 文本，命中的按钮从 aria-label 里取轮次号转正为幽灵记账；
- * MutationObserver 持续把幽灵轮次的标记按钮 `display: none`（React
- * 重渲染后再次隐藏）。
+ * 0.7.16 起不猜，直接读号：撤回不删日志、只追加遮蔽标记，
+ * `dsh-rewind-plugin` 把被遮蔽的行标成 `visibility: 'hidden'`，而每个 Chat
+ * 快照节点都带 `location.turn.turn` —— 正是概览条上的 turn 号。扫一遍
+ * 快照把「被撤回的轮次号」收下来，按号藏标记即可。
+ *
+ * 旧实现（0.7.14–0.7.15）是悬停每个标记读 tooltip 的 50 字预览再比对文本，
+ * 有三个致命问题，全部在这版消失：
+ *   - 同一句话撤回多次（同文本）时账本按预览去重，只能藏掉一个；
+ *   - 合成的 `pointermove` 不会让宿主的 tooltip 立刻换文本，读到上一条
+ *     残留文本 → 张冠李戴，把没撤回的轮次藏了；
+ *   - 已加载轮次的预览来自窗口、未加载的来自 outline，两者截断路径不同。
+ *
+ * 局限：只有落在当前加载窗口里的轮次才看得见。窗口外的老轮次无从判断，
+ * 保留它的标记 —— 宁可多一个标记，不可藏错。
  */
 import { chatSnapshotOf, type UiConversationLike } from './withdraw.ts'
-import { runtime } from './runtime.ts'
 
-const GHOST_KEY = 'dsqe-ghost-turns'
-const PENDING_KEY = 'dsqe-ghost-pending'
-const HEALED_KEY = 'dsqe-ghost-healed'
-/** 与宿主 `dsh-session-turn-outline` 的 PROMPT_PREVIEW_LIMIT 一致。 */
-const PREVIEW_LIMIT = 50
-/** 待匹配的重试间隔（observer 回调触发频繁，节流匹配尝试）。 */
-const MATCH_RETRY_MS = 3000
-/** 待匹配条目与会话记账的上限，防止 localStorage 无界增长。 */
-const MAX_RECORDS = 20
-
+/** 记账键。0.7.16 换新键，旧键（按预览文本匹配时代）里可能有错账，直接丢弃。 */
+const GHOST_KEY = 'dsqe-ghost-turns-v2'
+const LEGACY_KEYS = ['dsqe-ghost-turns', 'dsqe-ghost-pending', 'dsqe-ghost-healed']
+/** 单会话 / 总会话的记账上限，防止 localStorage 无界增长。 */
+const MAX_TURNS = 200
+const MAX_SESSIONS = 40
+/** 观察器里补扫快照的节流间隔。 */
+const SYNC_THROTTLE_MS = 1200
 /**
- * 复刻宿主的 rail 预览算法：文本块以空格拼接、折叠空白、按 50 字符截断
- * （`normalized.length > limit - 1` 时 `slice(0, limit - 1).trimEnd()` 加省略号）。
+ * 撤回成功后补扫的延迟序列：遮蔽标记由 rewind 插件异步落盘，快照重建也
+ * 不是同步的，单次扫描经常扫空。
  */
-export function previewOfWire(raw: string): string {
-  const normalized = raw.replace(/\s+/gu, ' ').trim()
-  if (normalized.length > PREVIEW_LIMIT - 1) {
-    return `${normalized.slice(0, PREVIEW_LIMIT - 1).trimEnd()}…`
-  }
-  return normalized
+const SYNC_RETRY_MS = [80, 250, 700, 1600, 3000] as const
+
+/** Chat 快照节点的结构切片（`dsh-rewind-plugin` 与本模块读的是同一批字段）。 */
+interface ChatNodeSlice {
+  readonly key?: unknown
+  readonly kind?: unknown
+  readonly visibility?: unknown
+  readonly anchorSeq?: unknown
+  readonly location?: { readonly kind?: unknown; readonly turn?: { readonly turn?: unknown } }
+  readonly data?: { readonly seq?: unknown; readonly role?: unknown; readonly content?: unknown }
+}
+
+interface SnapshotSlice {
+  readonly nodes?: unknown
 }
 
 /**
@@ -65,6 +78,15 @@ function lsSet(key: string, value: string): void {
   }
 }
 
+function lsRemove(key: string): void {
+  delete memoryStore[key]
+  try {
+    localStorage.removeItem(key)
+  } catch {
+    // 删不掉也无所谓：新键不复用旧数据
+  }
+}
+
 function readJson<T>(key: string, fallback: T): T {
   const stored = lsGet(key)
   if (stored === null) return fallback
@@ -79,188 +101,196 @@ function writeJson(key: string, value: unknown): void {
   lsSet(key, JSON.stringify(value))
 }
 
-function ghostsFor(sessionId: string): number[] {
-  const all = readJson<Record<string, number[]>>(GHOST_KEY, {})
-  return all[sessionId] ?? []
+/** 一次性清掉按预览文本匹配时代的旧账本（键名不同，留着只会添乱）。 */
+function dropLegacyBookkeeping(): void {
+  for (const key of LEGACY_KEYS) lsRemove(key)
 }
 
-function rememberGhost(sessionId: string, turn: number): void {
-  const all = readJson<Record<string, number[]>>(GHOST_KEY, {})
+function allGhosts(): Record<string, number[]> {
+  const stored = readJson<Record<string, number[]>>(GHOST_KEY, {})
+  if (stored === null || typeof stored !== 'object') return {}
+  return stored
+}
+
+/** 当前会话记账的幽灵轮次号（升序）。调试与测试入口。 */
+export function ghostTurnsOf(sessionId: string): number[] {
+  const list = allGhosts()[sessionId]
+  return Array.isArray(list) ? list.filter((turn) => typeof turn === 'number') : []
+}
+
+function rememberGhostTurns(sessionId: string, turns: readonly number[]): void {
+  const all = allGhosts()
   const list = all[sessionId] ?? []
-  if (!list.includes(turn)) list.push(turn)
+  let changed = false
+  for (const turn of turns) {
+    if (!list.includes(turn)) {
+      list.push(turn)
+      changed = true
+    }
+  }
+  if (!changed) return
+  list.sort((left, right) => left - right)
+  all[sessionId] = list.slice(-MAX_TURNS)
   const keys = Object.keys(all)
-  const trimmed = keys.length > MAX_RECORDS ? Object.fromEntries(keys.slice(-MAX_RECORDS).map((k) => [k, all[k]])) : all
-  trimmed[sessionId] = list
+  const trimmed =
+    keys.length > MAX_SESSIONS
+      ? Object.fromEntries(keys.slice(-MAX_SESSIONS).map((key) => [key, all[key]]))
+      : all
   writeJson(GHOST_KEY, trimmed)
 }
 
-/** 撤回预览的待匹配账本：sessionId → preview（rail 出现前先落账）。 */
-interface PendingEntry {
-  readonly sessionId: string
-  readonly preview: string
+/** 节点属于用户消息行（宿主 Chat 节点 kind 为 `user`；兼容旧版 key 形式）。 */
+function isUserRow(node: ChatNodeSlice): boolean {
+  if (node.kind === 'user') return true
+  const key = typeof node.key === 'string' ? node.key : ''
+  return key.includes('input-message')
 }
 
-function pendingList(): PendingEntry[] {
-  return readJson<PendingEntry[]>(PENDING_KEY, [])
-}
-
-/** 调试/测试钩子：当前待匹配账本。 */
-export function pendingEntriesOf(sessionId: string): PendingEntry[] {
-  return pendingList().filter((entry) => entry.sessionId === sessionId)
-}
-
-function writePending(list: PendingEntry[]): void {
-  writeJson(PENDING_KEY, list.slice(-MAX_RECORDS))
-}
-
-/** rail 的标记按钮：类名带 mark 的、aria-label 带轮次数字的 button。 */
-function markButtons(): HTMLButtonElement[] {
-  return Array.from(document.querySelectorAll<HTMLButtonElement>('button[class*="mark"][aria-label]')).filter(
-    (button) => /\d/.test(button.getAttribute('aria-label') ?? ''),
-  )
-}
-
-function turnOfButton(button: HTMLButtonElement): number | undefined {
-  const match = (button.getAttribute('aria-label') ?? '').match(/(\d+)/u)
-  return match === null ? undefined : Number(match[1])
-}
-
-/** 悬停一个标记按钮并读取 tooltip 的 prompt 预览文本（异步：等 React 渲染）。 */
-async function previewOfMark(button: HTMLButtonElement): Promise<string | null> {
-  button.dispatchEvent(new PointerEvent('pointermove', { bubbles: true }))
-  await new Promise<void>((resolve) => {
-    window.setTimeout(resolve, 80)
-  })
-  const nav = button.closest('nav')
-  // 宿主的 tooltip（role=tooltip）里第一个子元素是 prompt 预览、第二个是
-  // response 预览——只读 prompt，与记账的 previewOfWire 对齐。
-  const tooltip = nav?.querySelector('[role="tooltip"]')
-  const prompt = tooltip?.firstElementChild?.textContent ?? tooltip?.textContent ?? null
-  nav?.dispatchEvent(new PointerEvent('pointerleave', { bubbles: false }))
-  return prompt === null || prompt === '' ? null : prompt
-}
-
-/** 撤回成功后调用：把被撤回消息的 rail 预览记入待匹配账本。永不抛错。 */
-export function ghostWithdrawnTurn(sessionId: string, previewText: string): void {
-  try {
-    if (previewText === '') return
-    const list = pendingList().filter((entry) => entry.sessionId !== sessionId || entry.preview !== previewText)
-    list.push({ sessionId, preview: previewText })
-    writePending(list)
-    ensureGhostObserver()
-    const dbg = (globalThis as { __dsqeDebug?: boolean }).__dsqeDebug === true
-    if (dbg) console.log('[dsqe] rail:pending', { sessionId: sessionId.slice(0, 12), preview: previewText })
-  } catch {
-    // 概览条过滤是纯体验优化，任何失败都静默
-  }
-}
-
-/** 文本块拼接（宿主 rail 预览的输入与消息 content 的文本块一致）。 */
-function textOfContent(content: unknown): string {
-  if (!Array.isArray(content)) return ''
-  const parts: string[] = []
-  for (const block of content) {
-    if (block !== null && typeof block === 'object' && (block as { type?: unknown }).type === 'text') {
-      parts.push(String((block as { text?: unknown }).text ?? ''))
-    }
-  }
-  return parts.join(' ')
+/** 节点所属轮次号 —— 概览条上的 turn。 */
+function turnOfNode(node: ChatNodeSlice): number | undefined {
+  const turn = node.location?.turn?.turn
+  if (typeof turn === 'number' && Number.isSafeInteger(turn) && turn >= 0) return turn
+  return undefined
 }
 
 /**
- * 开账自愈：扫描会话快照里被遮蔽（visibility=hidden）的用户消息，把它们的
- * rail 预览补记入待匹配账本。覆盖所有「撤回发生在记账逻辑之外」的场景——
- * 旧版本撤回的、桌面端还没重启就撤回的——否则那些幽灵标记永远留在概览条上。
- * 按 seq 记账去重（dsqe-ghost-healed），只在会话绑定变化时调用。
+ * 快照里被遮蔽（撤回）的用户消息行 → 轮次号。纯函数，便于单测。
+ * assistant / command / turn-process 行被遮蔽是撤回的连带结果，不进记账。
  */
-export function healGhostBookkeeping(
+export function hiddenTurnsIn(snapshot: unknown): number[] {
+  const nodes = (snapshot as SnapshotSlice | undefined)?.nodes as
+    | { values?: () => Iterable<ChatNodeSlice> }
+    | undefined
+  if (nodes === undefined || typeof nodes.values !== 'function') return []
+  const turns = new Set<number>()
+  for (const node of nodes.values()) {
+    if (node === null || typeof node !== 'object') continue
+    if (node.visibility !== 'hidden') continue
+    if (!isUserRow(node)) continue
+    const turn = turnOfNode(node)
+    if (turn !== undefined) turns.add(turn)
+  }
+  return [...turns].sort((left, right) => left - right)
+}
+
+/**
+ * 扫一遍会话快照，把被撤回轮次的编号补记入账（幂等）。返回本会话当前账目。
+ * `getUiConversation` 用来拿当前绑定会话的 Chat 快照；快照没就绪时不清账。
+ */
+export function syncGhostTurns(
   sessionId: string,
   getUiConversation: () => UiConversationLike | undefined,
-): void {
+): number[] {
   try {
     const snapshot = chatSnapshotOf(getUiConversation(), sessionId)
-    const nodes = snapshot?.nodes
-    if (nodes === undefined || typeof nodes.values !== 'function') return
-    const healed = readJson<Record<string, number[]>>(HEALED_KEY, {})
-    const done = healed[sessionId] ?? []
-    let changed = false
-    for (const node of nodes.values()) {
-      if (node?.visibility !== 'hidden') continue
-      const key = String((node as { key?: unknown }).key ?? '')
-      // 用户消息行的 key 形如 `13:input-message<uuid>`；撤回目标之后的助手
-      // 行也被遮蔽，但它们不该进概览条记账。
-      if (!key.includes('input-message')) continue
-      const seq = (node as { data?: { seq?: unknown } }).data?.seq
-      if (typeof seq !== 'number') continue
-      if (done.includes(seq)) continue
-      const preview = previewOfWire(textOfContent(node.data?.content))
-      if (preview === '') continue
-      done.push(seq)
-      changed = true
-      const list = pendingList().filter((entry) => entry.sessionId !== sessionId || entry.preview !== preview)
-      list.push({ sessionId, preview })
-      writePending(list)
+    const found = hiddenTurnsIn(snapshot)
+    if (found.length > 0) {
+      rememberGhostTurns(sessionId, found)
       const dbg = (globalThis as { __dsqeDebug?: boolean }).__dsqeDebug === true
-      if (dbg) console.log('[dsqe] rail:heal', { sessionId: sessionId.slice(0, 12), seq, preview })
-    }
-    if (changed) {
-      const keys = Object.keys(healed)
-      const trimmed =
-        keys.length > MAX_RECORDS
-          ? Object.fromEntries(keys.slice(-MAX_RECORDS).map((k) => [k, healed[k]]))
-          : healed
-      trimmed[sessionId] = done.slice(-200)
-      writeJson(HEALED_KEY, trimmed)
+      if (dbg) console.log('[dsqe] rail:sync', { sessionId: sessionId.slice(0, 12), turns: found })
     }
   } catch {
-    // 自愈是纯体验优化，任何失败都静默
+    // 概览条过滤是纯体验优化，任何失败都静默
+  }
+  return ghostTurnsOf(sessionId)
+}
+
+/** 当前绑定的会话与其快照读取器（由 composer bridge 发布）。 */
+interface GhostSession {
+  readonly sessionId: string
+  readonly getUi: () => UiConversationLike | undefined
+}
+
+let bound: GhostSession | null = null
+let lastSyncAt = 0
+const retryTimers = new Set<number>()
+
+function clearRetries(): void {
+  for (const timer of retryTimers) window.clearTimeout(timer)
+  retryTimers.clear()
+}
+
+/** 立即扫一次 + 重排标记可见性。 */
+function syncNow(): void {
+  if (bound === null) return
+  lastSyncAt = Date.now()
+  syncGhostTurns(bound.sessionId, bound.getUi)
+  applyGhostFilter()
+}
+
+/**
+ * 短期内多扫几次：撤回刚发生时遮蔽标记还没落盘，切会话回来时快照可能还
+ * 在重建。永不抛错。
+ */
+export function syncGhostsSoon(): void {
+  if (bound === null) return
+  clearRetries()
+  syncNow()
+  for (const delay of SYNC_RETRY_MS) {
+    const timer = window.setTimeout(() => {
+      retryTimers.delete(timer)
+      syncNow()
+    }, delay)
+    retryTimers.add(timer)
   }
 }
 
-/** 尝试把待匹配预览对到 rail 标记上：命中即转正为幽灵记账。 */
-async function tryMatchPending(): Promise<void> {
-  const sessionId = runtime.sessionId
-  if (sessionId === null) return
-  const pending = pendingList().filter((entry) => entry.sessionId === sessionId)
-  if (pending.length === 0) return
-  const buttons = markButtons()
-  if (buttons.length === 0) return
-  for (const button of buttons) {
-    const shown = await previewOfMark(button)
-    if (shown === null) continue
-    // 精确匹配优先；前缀兜底——宿主对 loaded 轮次的预览截断路径可能与
-    // outline 的 50 字符算法略有出入。
-    const hit =
-      pending.find((entry) => entry.preview === shown) ??
-      pending.find(
-        (entry) =>
-          entry.preview.slice(0, 30) === shown.slice(0, 30) ||
-          shown.startsWith(entry.preview.slice(0, 30)),
-      )
-    if (hit === undefined) continue
-    const turn = turnOfButton(button)
-    if (turn === undefined) return
-    rememberGhost(sessionId, turn)
-    writePending(pendingList().filter((entry) => !(entry.sessionId === hit.sessionId && entry.preview === hit.preview)))
-    const dbg = (globalThis as { __dsqeDebug?: boolean }).__dsqeDebug === true
-    if (dbg) console.log('[dsqe] rail:ghost', { sessionId: sessionId.slice(0, 12), turn, preview: hit.preview })
-    applyGhostFilter()
+/**
+ * 绑定当前会话（composer bridge 在会话切换时调用）。`sessionId` 为 null 时
+ * 只解绑，不动账本。
+ */
+export function setGhostSession(
+  sessionId: string | null,
+  getUiConversation?: (() => UiConversationLike | undefined) | null,
+): void {
+  clearRetries()
+  if (sessionId === null) {
+    bound = null
     return
   }
+  bound = { sessionId, getUi: getUiConversation ?? (() => undefined) }
+  dropLegacyBookkeeping()
+  ensureGhostObserver()
+  syncGhostsSoon()
 }
 
-let lastMatchAttempt = 0
+/**
+ * rail 的标记按钮：宿主 `TurnMark` 渲染的 `button`（类名含 mark、带
+ * `data-index`、aria-label 形如「跳转到第 3 轮」）。旧版宿主没有
+ * `data-index` 时退回只看类名 + aria-label。
+ */
+function markButtons(): HTMLButtonElement[] {
+  const strict = Array.from(
+    document.querySelectorAll<HTMLButtonElement>('button[class*="mark"][data-index][aria-label]'),
+  )
+  const candidates =
+    strict.length > 0
+      ? strict
+      : Array.from(document.querySelectorAll<HTMLButtonElement>('button[class*="mark"][aria-label]'))
+  return candidates.filter((button) => /\d/u.test(button.getAttribute('aria-label') ?? ''))
+}
 
-/** 把当前会话记账轮次的标记按钮藏掉；顺带节流地补匹配待定预览。 */
+/**
+ * 从标记按钮的 aria-label 里取轮次号。宿主的两个文案模板都只带一个数字：
+ * 「跳转到第 N 轮」/「加载并跳转到第 N 轮」/「Jump to turn N」。
+ */
+export function turnOfLabel(label: string): number | undefined {
+  const match = label.match(/(\d+)/u)
+  return match === null ? undefined : Number(match[1])
+}
+
+function turnOfButton(button: HTMLButtonElement): number | undefined {
+  return turnOfLabel(button.getAttribute('aria-label') ?? '')
+}
+
+/** 把当前会话记账轮次的标记按钮藏掉；顺带节流补扫快照。 */
 function applyGhostFilter(): void {
-  const sessionId = runtime.sessionId
-  if (sessionId === null) return
-  const ghosts = ghostsFor(sessionId)
+  if (bound === null) return
+  const ghosts = ghostTurnsOf(bound.sessionId)
   for (const button of markButtons()) {
     const turn = turnOfButton(button)
     if (turn === undefined) continue
-    const ghost = ghosts.includes(turn)
-    if (ghost) {
+    if (ghosts.includes(turn)) {
       button.style.display = 'none'
       button.setAttribute('data-dsqe-ghost', 'true')
     } else if (button.getAttribute('data-dsqe-ghost') === 'true') {
@@ -268,11 +298,7 @@ function applyGhostFilter(): void {
       button.removeAttribute('data-dsqe-ghost')
     }
   }
-  const now = Date.now()
-  if (pendingList().some((entry) => entry.sessionId === sessionId) && now - lastMatchAttempt > MATCH_RETRY_MS) {
-    lastMatchAttempt = now
-    void tryMatchPending()
-  }
+  if (Date.now() - lastSyncAt > SYNC_THROTTLE_MS) syncNow()
 }
 
 let observer: MutationObserver | null = null

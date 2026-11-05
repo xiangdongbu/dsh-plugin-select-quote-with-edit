@@ -1011,40 +1011,75 @@ check(
       wire.startsWith('帮我运行 ls\n\n# Quoted references:') && wire.trimEnd().endsWith('</dsh-quotes>'),
       JSON.stringify(wire.slice(0, 60)),
     )
-    check(
-      'rail: collapsed preview of the new wire starts with the typed text',
-      turnGhost.previewOfWire(wire).startsWith('帮我运行 ls'),
-      turnGhost.previewOfWire(wire),
-    )
   }
-  // heal bookkeeping: hidden (withdrawn) user nodes enter the pending list
+  // 0.7.16: ghost marks are resolved by TURN NUMBER from the chat snapshot
+  // (`location.turn.turn`), never by matching preview text.
   {
-    const healSnapshot = {
+    const node = (key, kind, visibility, turn, text) => ({
+      key,
+      kind,
+      visibility,
+      location: { kind: 'turn', turn: { turn } },
+      data: { seq: turn * 10, content: [{ type: 'text', text }] },
+    })
+    const snapshot = {
       nodes: new Map([
-        ['7:input-message-abc', { visibility: 'hidden', key: '7:input-message-abc', data: { seq: 7, content: [{ type: 'text', text: '被撤回的引用消息' }] } }],
-        ['8:assistant-def', { visibility: 'hidden', key: '["8:assistant-def"]', data: { seq: 8, content: [{ type: 'text', text: '被撤回的回复' }] } }],
-        ['9:input-message-ghi', { visibility: 'visible', key: '9:input-message-ghi', data: { seq: 9, content: [{ type: 'text', text: '留下的消息' }] } }],
+        ['12:input-message-a', node('12:input-message-a', 'user', 'hidden', 2, '明天农历几号了？')],
+        ['13:assistant-a', node('13:assistant-a', 'assistant', 'hidden', 2, '明天是农历九月十七')],
+        ['20:input-message-b', node('20:input-message-b', 'user', 'hidden', 3, '明天农历几号了？')],
+        ['30:input-message-c', node('30:input-message-c', 'user', 'visible', 4, '明天星期几？')],
+        ['40:input-message-d', node('40:input-message-d', 'user', 'hidden', 5, '明天几号了？')],
       ]),
-      order: ['7:input-message-abc', '8:assistant-def', '9:input-message-ghi'],
     }
-    const getUi = () => ({ binding: () => ({ target: () => ({ getSnapshot: () => healSnapshot }) }) })
-    turnGhost.healGhostBookkeeping('sess-heal', getUi)
-    const pending1 = turnGhost.pendingEntriesOf('sess-heal')
     check(
-      'rail: heal records hidden user messages as pending ghosts (assistant rows skipped)',
-      pending1 !== null && pending1.length === 1 && pending1[0].preview === '被撤回的引用消息' && pending1[0].sessionId === 'sess-heal',
-      JSON.stringify(pending1),
+      'rail: hidden user rows resolve to their rail turn numbers (assistant rows skipped)',
+      JSON.stringify(turnGhost.hiddenTurnsIn(snapshot)) === '[2,3,5]',
+      JSON.stringify(turnGhost.hiddenTurnsIn(snapshot)),
     )
-    turnGhost.healGhostBookkeeping('sess-heal', getUi)
-    const pending2 = turnGhost.pendingEntriesOf('sess-heal')
     check(
-      'rail: heal is seq-deduped across repeated scans',
-      pending2 !== null && pending2.length === 1,
-      JSON.stringify(pending2),
+      'rail: identical-text withdrawals all map to their own turn (no preview dedupe)',
+      turnGhost.hiddenTurnsIn(snapshot).length === 3,
+    )
+    const getUi = () => ({ binding: () => ({ target: () => ({ getSnapshot: () => snapshot }) }) })
+    check(
+      'rail: sync records the turns and is idempotent across rescan',
+      JSON.stringify(turnGhost.syncGhostTurns('sess-ghost', getUi)) === '[2,3,5]' &&
+        JSON.stringify(turnGhost.syncGhostTurns('sess-ghost', getUi)) === '[2,3,5]',
+      JSON.stringify(turnGhost.ghostTurnsOf('sess-ghost')),
+    )
+    // A view that is not ready yet (no snapshot) must not wipe the ledger.
+    const noView = () => ({ binding: () => ({ target: () => ({ getSnapshot: () => undefined }) }) })
+    turnGhost.syncGhostTurns('sess-ghost', noView)
+    check(
+      'rail: an unbound snapshot never erases recorded ghosts',
+      JSON.stringify(turnGhost.ghostTurnsOf('sess-ghost')) === '[2,3,5]',
+      JSON.stringify(turnGhost.ghostTurnsOf('sess-ghost')),
+    )
+    check(
+      'rail: ghosts are scoped per session and never leak across sessions',
+      JSON.stringify(turnGhost.ghostTurnsOf('sess-other')) === '[]',
+      JSON.stringify(turnGhost.ghostTurnsOf('sess-other')),
+    )
+    check(
+      'rail: turn number parses from both zh/en mark labels',
+      turnGhost.turnOfLabel('跳转到第 3 轮') === 3 &&
+        turnGhost.turnOfLabel('加载并跳转到第 12 轮') === 12 &&
+        turnGhost.turnOfLabel('Jump to turn 7') === 7 &&
+        turnGhost.turnOfLabel('没数字') === undefined,
+      JSON.stringify([
+        turnGhost.turnOfLabel('跳转到第 3 轮'),
+        turnGhost.turnOfLabel('加载并跳转到第 12 轮'),
+        turnGhost.turnOfLabel('Jump to turn 7'),
+      ]),
+    )
+    // Old preview-matching ledgers held wrong turns (they hid the marks that
+    // had NOT been withdrawn) — 0.7.16 reads a fresh key and purges the old.
+    check(
+      'rail: legacy preview-matching ledgers are no longer consulted',
+      typeof turnGhost.pendingEntriesOf === 'undefined' && typeof turnGhost.previewOfWire === 'undefined',
+      JSON.stringify(Object.keys(turnGhost).filter((key) => /preview|pending|heal/i.test(key))),
     )
   }
-  // host preview algorithm parity: the rail tooltip must equal previewOfWire exactly
-  check('rail: preview matches the host turn-outline preview algorithm', turnGhost.previewOfWire('a\n\n b   c') === 'a b c' && turnGhost.previewOfWire('字'.repeat(49)) === '字'.repeat(49) && turnGhost.previewOfWire('字'.repeat(60)) === `${'字'.repeat(49)}…`, JSON.stringify([turnGhost.previewOfWire('a\n\n b   c'), turnGhost.previewOfWire('字'.repeat(60))]))
 }
 
 // ---------------------------------------------------------------- withdraw engine
