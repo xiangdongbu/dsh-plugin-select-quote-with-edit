@@ -7,6 +7,9 @@ export interface SlotDefinition {
   order?: number
   priority?: number
   locale?: string
+  /** Declares the child slot chains the component may render; the machinery
+   * provides a `renderSlotChain` prop for the declared chains. */
+  children?: Record<string, { kind: string; scope?: string }>
 }
 
 export interface SlotEntryInspection {

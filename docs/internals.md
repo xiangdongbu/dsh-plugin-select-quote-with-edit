@@ -147,6 +147,7 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 - `dsh-rewind-plugin` 的内部命令 `/rewind-plugin @<seq> both`、其 Client 可见性遮蔽、以及它自带按钮的类名 `dsh-rewind-btn`（用于隐藏，避免重复入口）；
 - 深色：`body[data-ds-dark-theme]`；磨砂走 `--dsw-menu-*`；
 - 不 `require` 任何 Harness Client 包（verify 有闸）。
+- **chat.node 注册必须声明 children 链（0.2.2-rc 宿主）**：宿主注册 user/steering 视图时声明 `children: {'conversation.chat.user.before': {kind:'chain', scope:'session'}}`，槽位机制**只给声明了 children 的条目**注入 `renderSlotChain` prop。0.2.2-rc.1 起宿主的用户视图（`UserStyleBubble`）**无条件调用** `renderSlotChain("conversation.chat.user.before", …)`——我们的条目若不声明 children，委派纯文本消息给宿主视图时就会 `TypeError: renderSlotChain is not a function`，宿主把崩溃条目降级，**整个会话所有行**（含引用消息）翻回宿主默认视图：胶囊没了、编辑/撤回按钮没了（0.7.10 时段报障、0.7.12 修复）。升级宿主后复核 children 声明与 `renderSlotChain` 的签名。
 
 ## 排错
 

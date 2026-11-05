@@ -978,6 +978,17 @@ check(
     clientCode.includes('[data-composer-card] { position: relative'),
 )
 
+check(
+  'chat.node registration declares the user.before chain children',
+  // The 0.2.2-rc host hands renderSlotChain only to entries declaring their
+  // child chains. Without the declaration, delegating a PLAIN message to the
+  // host view crashed ("renderSlotChain is not a function"), the host tore
+  // the crashed entry down, and the whole transcript fell back to plain
+  // views: no chips, no edit/withdraw buttons.
+  clientCode.includes('"conversation.chat.user.before"') &&
+    clientCode.includes('kind: "chain", scope: "session"'),
+)
+
 // ---------------------------------------------------------------- withdraw engine
 {
   const wdir = mkdtempSync(join(tmpdir(), 'dsqe-withdraw-'))

@@ -216,6 +216,13 @@ export function apply(ctx: ClientContext): void {
           // The delegated host view needs its own translator; the chat
           // namespace is the one it is written against.
           locale: 'chat',
+          // The 0.2.2-rc host hands `renderSlotChain` only to entries that
+          // declare the child chains their view renders. Without this the
+          // plain-message delegation (our view rendering the host component
+          // with our props) crashed — renderSlotChain is not a function — the
+          // host tore the crashed entry down, and the whole transcript fell
+          // back to plain host views: no chips, no edit/withdraw buttons.
+          children: { 'conversation.chat.user.before': { kind: 'chain', scope: 'session' } },
         },
         View,
       )
