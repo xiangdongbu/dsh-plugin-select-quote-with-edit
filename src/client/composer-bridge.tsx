@@ -31,12 +31,11 @@ export interface WithdrawServices {
  * the ↶ withdraw engine bound to the current session.
  */
 /**
- * Deferred ghost-sync retry timer (module-level: cleared across re-renders).
- * The effect below runs on every render (no dependency array — it publishes the
- * live draft), so the snapshot scan itself is gated on the session id.
+ * Session the ghost bookkeeping is bound to (undefined = never bound). The
+ * effect below runs on every render (no dependency array — it publishes the
+ * live draft), so the snapshot scan is gated on the session id: only a real
+ * session switch re-binds (and re-scans) the rail ghost ledger.
  */
-let pendingHealTimer: number | undefined
-/** Session the ghost bookkeeping is currently bound to (undefined = never bound). */
 let ghostBoundSession: string | null | undefined
 export function ComposerBridge(props: {
   useInput?: <T>(selector: (state: { draft: string; draftRev: number }) => T) => T
@@ -87,7 +86,6 @@ export function ComposerBridge(props: {
     // 记账，之后由 chrome 在撤回成功后触发重扫（runtime.syncGhosts）。
     if (sessionId !== ghostBoundSession) {
       ghostBoundSession = sessionId
-      window.clearTimeout(pendingHealTimer)
       setGhostSession(sessionId, () => services?.uiConversation?.() as UiConversationLike | undefined)
     }
     runtime.syncGhosts = sessionId === null ? null : () => syncGhostsSoon()
