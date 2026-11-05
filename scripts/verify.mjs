@@ -1072,6 +1072,36 @@ check(
         turnGhost.turnOfLabel('Jump to turn 7'),
       ]),
     )
+    // Compact layout: the surviving marks must close the gaps the hidden ones
+    // leave (the host keeps positioning marks by their original index).
+    {
+      const geometry = turnGhost.railGeometry(
+        [
+          { index: 0, y: 1 },
+          { index: 1, y: 11 },
+        ],
+        null,
+        null,
+      )
+      check(
+        'rail: mark pitch/origin is measured from two untouched marks',
+        geometry !== null && geometry.pitch === 10 && geometry.origin === 1,
+        JSON.stringify(geometry),
+      )
+      const single = turnGhost.railGeometry([{ index: 3, y: 31 }], 10, null)
+      check(
+        'rail: one measured mark plus the cached pitch still resolves the origin',
+        single !== null && single.pitch === 10 && single.origin === 1,
+        JSON.stringify(single),
+      )
+      check(
+        'rail: no measurement and no cache never guesses a layout',
+        turnGhost.railGeometry([], null, null) === null,
+      )
+      // turns 1..5 with 2,3,4 withdrawn → the two survivors land at y=1 and y=11
+      const placed = [0, 4].map((position) => geometry.origin + geometry.pitch * (position === 0 ? 0 : 1))
+      check('rail: survivors compact into a contiguous ladder', JSON.stringify(placed) === '[1,11]', JSON.stringify(placed))
+    }
     // Old preview-matching ledgers held wrong turns (they hid the marks that
     // had NOT been withdrawn) — 0.7.16 reads a fresh key and purges the old.
     check(

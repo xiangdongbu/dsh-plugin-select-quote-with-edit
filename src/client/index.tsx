@@ -16,10 +16,12 @@ import { installSidebarDetail } from './sidebar-tab.tsx'
 import { UserMessageView } from './transcript.tsx'
 import { pickDelegate } from './host-node.ts'
 import { runtime } from './runtime.ts'
+import { syncGhostsSoon } from './turn-ghost.ts'
 import { watchComposerResize } from './composer-resize.ts'
 import { watchQuotePaste } from './paste.ts'
 import { registerQuoteSource, watchChipDeletion } from './inline-chips.ts'
 import { watchChipClipboard } from './chip-clipboard.ts'
+import { installDiag } from './diag.ts'
 
 /**
  * Browser half of dsh-plugin-select-quote-with-edit — the two features in one
@@ -150,10 +152,48 @@ export function apply(ctx: ClientContext): void {
       return undefined
     }
   }
+
+  /**
+   * `uiConversation` is NOT in this plugin's `inject` list (adding a service
+   * there makes the whole plugin wait for it), and a property read of a
+   * non-injected service is gated — so the withdraw engine has been running
+   * without a chat snapshot all along and silently falling back to the seq the
+   * node view registered. The rail-ghost filter cannot work that way: it needs
+   * the snapshot's `visibility` + `location.turn`. Resolve the service through
+   * an optional child scope, exactly like `dsh-rewind-plugin` does.
+   */
+  const injected: { uiConversation?: unknown; conversation?: unknown } = {}
+  ctx.effect(() => {
+    const inject = (ctx as unknown as {
+      inject?: (names: readonly string[], callback: (child: Record<string, unknown>) => unknown) => unknown
+    }).inject
+    if (typeof inject !== 'function') return
+    const dispose = inject(['uiConversation', 'conversation'], (child) => {
+      const read = (name: string): unknown => {
+        try {
+          const get = child.get
+          const value = typeof get === 'function' ? (get as (key: string) => unknown).call(child, name) : undefined
+          return value ?? child[name]
+        } catch {
+          return undefined
+        }
+      }
+      injected.uiConversation = read('uiConversation')
+      injected.conversation = read('conversation')
+      // The snapshot may only become readable now: re-run the rail ghost sync.
+      syncGhostsSoon()
+    })
+    return () => {
+      injected.uiConversation = undefined
+      injected.conversation = undefined
+      if (typeof dispose === 'function') (dispose as () => void)()
+    }
+  }, 'select-quote-with-edit: uiConversation scope')
+
   const withdrawServices = {
     sessions: () => safeGet('sessions'),
-    uiConversation: () => safeGet('uiConversation'),
-    conversation: () => safeGet('conversation'),
+    uiConversation: () => injected.uiConversation ?? safeGet('uiConversation'),
+    conversation: () => injected.conversation ?? safeGet('conversation'),
   }
   function ComposerBridgeWithServices(props: Record<string, unknown>) {
     return <ComposerBridge {...props} services={withdrawServices} />
@@ -234,4 +274,6 @@ export function apply(ctx: ClientContext): void {
 
   // Composer grip: drag the input taller, double-click resets (plain DOM).
   ctx.effect(() => watchComposerResize(), 'select-quote-with-edit: composer resize')
+
+  installDiag(ctx as unknown as Record<string, unknown>)
 }

@@ -174,6 +174,35 @@ export function hiddenTurnsIn(snapshot: unknown): number[] {
 }
 
 /**
+ * 第二条独立判据：rail items = outline ∪ 已加载轮次，而宿主的
+ * `turnNavigationItem` 只把**还有可见节点**的轮次做成 loaded item——
+ * 整轮被遮蔽的轮次在 `navigation.items()` 里根本没有，但它的节点还留在
+ * `locations.getTurn(turn)` 索引里。于是「窗口里有节点、却没有 loaded item」
+ * = 这一轮被撤回了。与 `visibility` 判据互为兜底（宿主改标记形态也不怕）。
+ */
+function ghostTurnsFromNavigation(snapshot: unknown, railTurns: readonly number[]): number[] {
+  if (railTurns.length === 0) return []
+  const nav = (snapshot as { navigation?: { items?: () => readonly { turn?: unknown }[] } } | undefined)?.navigation
+  const locations = (snapshot as { locations?: { getTurn?: (turn: number) => unknown } } | undefined)?.locations
+  if (typeof nav?.items !== 'function' || typeof locations?.getTurn !== 'function') return []
+  const withItem = new Set<number>()
+  for (const item of nav.items()) {
+    if (typeof item?.turn === 'number') withItem.add(item.turn)
+  }
+  const out: number[] = []
+  for (const turn of railTurns) {
+    let keys: unknown
+    try {
+      keys = locations.getTurn(turn)
+    } catch {
+      continue
+    }
+    if (Array.isArray(keys) && keys.length > 0 && !withItem.has(turn)) out.push(turn)
+  }
+  return out
+}
+
+/**
  * 扫一遍会话快照，把被撤回轮次的编号补记入账（幂等）。返回本会话当前账目。
  * `getUiConversation` 用来拿当前绑定会话的 Chat 快照；快照没就绪时不清账。
  */
@@ -184,10 +213,19 @@ export function syncGhostTurns(
   try {
     const snapshot = chatSnapshotOf(getUiConversation(), sessionId)
     const found = hiddenTurnsIn(snapshot)
-    if (found.length > 0) {
-      rememberGhostTurns(sessionId, found)
+    const railTurns = railTurnsOf()
+    const fromNav = ghostTurnsFromNavigation(snapshot, railTurns)
+    const all = [...new Set([...found, ...fromNav])].sort((left, right) => left - right)
+    if (all.length > 0) {
+      rememberGhostTurns(sessionId, all)
       const dbg = (globalThis as { __dsqeDebug?: boolean }).__dsqeDebug === true
-      if (dbg) console.log('[dsqe] rail:sync', { sessionId: sessionId.slice(0, 12), turns: found })
+      if (dbg) {
+        console.log('[dsqe] rail:sync', {
+          sessionId: sessionId.slice(0, 12),
+          hiddenTurns: found,
+          navigationTurns: fromNav,
+        })
+      }
     }
   } catch {
     // 概览条过滤是纯体验优化，任何失败都静默
@@ -233,6 +271,34 @@ export function syncGhostsSoon(): void {
     }, delay)
     retryTimers.add(timer)
   }
+  if (ghostTurnsOf(bound.sessionId).length === 0) startWatchdog()
+}
+
+/**
+ * 兜底看门狗：快照访问器可能在绑定之后才可用（服务注入是异步的），rail 也
+ * 可能比快照晚渲染。账本还是空的时候每 2s 补扫一次，最多 10 次；一旦扫到
+ * 幽灵或超出次数就退出。
+ */
+let watchdogTimer: number | null = null
+
+function stopWatchdog(): void {
+  if (watchdogTimer === null) return
+  window.clearInterval(watchdogTimer)
+  watchdogTimer = null
+}
+
+function startWatchdog(): void {
+  if (watchdogTimer !== null) return
+  let ticks = 0
+  watchdogTimer = window.setInterval(() => {
+    ticks += 1
+    if (bound === null || ticks > 10 || ghostTurnsOf(bound.sessionId).length > 0) {
+      stopWatchdog()
+      return
+    }
+    if (markButtons().length < 2) return
+    syncNow()
+  }, 2000)
 }
 
 /**
@@ -244,11 +310,15 @@ export function setGhostSession(
   getUiConversation?: (() => UiConversationLike | undefined) | null,
 ): void {
   clearRetries()
+  stopWatchdog()
   if (sessionId === null) {
     bound = null
     return
   }
   bound = { sessionId, getUi: getUiConversation ?? (() => undefined) }
+  // 标记几何按 rail 实测缓存；换会话等于换一个 rail，重新测。
+  pitchCache = null
+  originCache = null
   dropLegacyBookkeeping()
   ensureGhostObserver()
   syncGhostsSoon()
@@ -283,21 +353,154 @@ function turnOfButton(button: HTMLButtonElement): number | undefined {
   return turnOfLabel(button.getAttribute('aria-label') ?? '')
 }
 
-/** 把当前会话记账轮次的标记按钮藏掉；顺带节流补扫快照。 */
+/** rail 上此刻渲染的轮次号（DOM 侧），给 navigation 判据用。永不抛错。 */
+function railTurnsOf(): number[] {
+  try {
+    const turns: number[] = []
+    for (const button of markButtons()) {
+      const turn = turnOfButton(button)
+      if (turn !== undefined && !turns.includes(turn)) turns.push(turn)
+    }
+    return turns
+  } catch {
+    return []
+  }
+}
+
+/** 标记在 rail 上的当前纵向偏移（宿主虚拟列表写的是 inline transform）。 */
+function translateYOf(element: HTMLElement): number | undefined {
+  const inline = /translateY\((-?[\d.]+)px\)/u.exec(element.style.transform)
+  if (inline !== null) return Number(inline[1])
+  const matrix = /matrix\(([^)]+)\)/u.exec(getComputedStyle(element).transform)
+  if (matrix === null) return undefined
+  const parts = matrix[1].split(',').map((value) => Number(value.trim()))
+  return parts.length >= 6 && Number.isFinite(parts[5]) ? parts[5] : undefined
+}
+
+/** 宿主的固定间距（TURN_SPACING_PX）与首标记偏移，实测后缓存。 */
+let pitchCache: number | null = null
+let originCache: number | null = null
+
+interface MarkView {
+  readonly button: HTMLButtonElement
+  readonly index: number
+  readonly ghost: boolean
+}
+
+/**
+ * 由实测到的「原始位置采样点」反推 rail 的固定间距与首标记偏移（纯函数）。
+ * 两个点即可定一条直线；只有一个点时借用缓存里的 pitch；都没有就放弃
+ * （返回 null = 不重排）。
+ */
+export function railGeometry(
+  points: readonly { readonly index: number; readonly y: number }[],
+  cachedPitch: number | null,
+  cachedOrigin: number | null,
+): { pitch: number; origin: number } | null {
+  const first = points[0]
+  const second = points[1]
+  if (first !== undefined && second !== undefined) {
+    const delta = second.index - first.index
+    if (delta !== 0) {
+      const pitch = (second.y - first.y) / delta
+      if (pitch > 0) return { pitch, origin: first.y - pitch * first.index }
+    }
+  }
+  if (first !== undefined && cachedPitch !== null) {
+    return { pitch: cachedPitch, origin: first.y - cachedPitch * first.index }
+  }
+  if (cachedPitch !== null && cachedOrigin !== null) {
+    return { pitch: cachedPitch, origin: cachedOrigin }
+  }
+  return null
+}
+
+/**
+ * 压缩重排：被撤回轮次的标记只是 `display:none`，宿主仍按原索引排位，
+ * 于是 rail 上留下空档。这里把「还要显示的标记」按顺序重新落位——
+ * 第 k 个可见标记放到 `origin + pitch * k`（= 它本来该在的位置）。
+ *
+ * 几何从没被我们动过的标记实测（被隐藏的标记永远保留原始 transform）。
+ * 拿不到几何就只隐藏、不重排（宁可留空档，也不能把标记排错）。
+ */
+function compactMarks(views: readonly MarkView[], pitch: number | null, origin: number | null): void {
+  if (views.length === 0) return
+  const frame = views[0].button.closest('nav')
+  // 虚拟窗口裁掉了一部分标记时索引不连续，重排会算错位置——不碰。
+  const contiguous = views.every((view, position) => view.index === position)
+  if (!contiguous) return
+  // 概览条内部滚动时（>40 轮）虚拟列表会持续改写 transform，重排会打架。
+  const scroller =
+    frame === null ? null : (frame.firstElementChild as HTMLElement | null)
+  if (scroller !== null && scroller.scrollHeight > scroller.clientHeight + 1) return
+
+  let measuredPitch = pitch
+  let measuredOrigin = origin
+  const points: { index: number; y: number }[] = []
+  for (const view of views) {
+    if (view.button.getAttribute('data-dsqe-compact') === '1') continue
+    const y = translateYOf(view.button)
+    if (y !== undefined) points.push({ index: view.index, y })
+  }
+  const geometry = railGeometry(points, measuredPitch, measuredOrigin)
+  if (geometry === null) return
+  measuredPitch = geometry.pitch
+  measuredOrigin = geometry.origin
+  pitchCache = measuredPitch
+  originCache = measuredOrigin
+
+  let rank = 0
+  for (const view of views) {
+    if (view.ghost) continue
+    const y = measuredOrigin + measuredPitch * rank
+    const current = translateYOf(view.button)
+    if (current === undefined || Math.abs(current - y) > 0.05) {
+      view.button.style.transform = `translateY(${y}px)`
+      view.button.setAttribute('data-dsqe-compact', '1')
+    }
+    rank += 1
+  }
+
+  // 容器高度仍是「全部轮次」的高度，标记会贴着上半段：把整条 rail 往下挪
+  // 半个被省掉的高度，视觉上重新回到中线。
+  if (frame !== null) {
+    const removed = (views.length - rank) * measuredPitch
+    frame.style.marginTop = removed === 0 ? '' : `${removed / 2}px`
+  }
+
+  // 悬浮预览卡片按虚拟列表的 start 定位，重排后要跟着挪。宿主把预览卡的
+  // `id` 写成被预览标记的 `aria-describedby`，据此反查是哪一个标记。
+  const tooltip = frame?.querySelector<HTMLElement>('[role="tooltip"]')
+  const ownerId = tooltip?.id ?? ''
+  const owner =
+    ownerId === '' ? null : frame?.querySelector<HTMLElement>(`button[aria-describedby~="${ownerId}"]`)
+  const ownerY = owner === null || owner === undefined ? undefined : translateYOf(owner)
+  if (tooltip !== null && tooltip !== undefined && ownerY !== undefined) {
+    tooltip.style.setProperty('--turn-preview-center', `${ownerY + measuredPitch / 2}px`)
+  }
+}
+
+/** 把当前会话记账轮次的标记按钮藏掉并重排；顺带节流补扫快照。 */
 function applyGhostFilter(): void {
   if (bound === null) return
   const ghosts = ghostTurnsOf(bound.sessionId)
+  const views: MarkView[] = []
   for (const button of markButtons()) {
     const turn = turnOfButton(button)
     if (turn === undefined) continue
-    if (ghosts.includes(turn)) {
+    const ghost = ghosts.includes(turn)
+    if (ghost) {
       button.style.display = 'none'
       button.setAttribute('data-dsqe-ghost', 'true')
     } else if (button.getAttribute('data-dsqe-ghost') === 'true') {
       button.style.display = ''
       button.removeAttribute('data-dsqe-ghost')
     }
+    const index = Number(button.getAttribute('data-index') ?? String(views.length))
+    views.push({ button, index: Number.isFinite(index) ? index : views.length, ghost })
   }
+  views.sort((left, right) => left.index - right.index)
+  compactMarks(views, pitchCache, originCache)
   if (Date.now() - lastSyncAt > SYNC_THROTTLE_MS) syncNow()
 }
 
