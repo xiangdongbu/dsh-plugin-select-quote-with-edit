@@ -19,7 +19,6 @@ export const COMPOSER_MAX_HEIGHT = 640
 const MAX_VH = 0.6
 
 const HANDLE_CLASS = 'dsqe-rzHandle'
-const CARD_CLASS = 'dsqe_rzCard'
 const DRAGGING_FLAG = 'data-dragging'
 const RESIZING_FLAG = 'data-dsqe-resizing'
 
@@ -140,7 +139,6 @@ function ensureHandle(card: HTMLElement): void {
   // everything below the handle creation must be idempotent.
   keepScrollLocal(card)
   if (card.querySelector(`.${HANDLE_CLASS}`)) return
-  card.classList.add(CARD_CLASS)
   const handle = document.createElement('div')
   handle.className = HANDLE_CLASS
   handle.setAttribute('role', 'separator')

@@ -966,6 +966,20 @@ check(
   /\w+\.text\s*===\s*trimmed/.test(clientCode),
 )
 
+check(
+  'composer grip hides until the card is hovered',
+  // Hidden by default with pointer-events: none (no invisible hot strip over
+  // the composer's top edge); shown on card hover and kept visible while
+  // dragging. Hover keys off the host's own [data-composer-card] attribute —
+  // the host's React re-renders reset className, so a plugin-added class on
+  // the card cannot be relied on.
+  clientCode.includes('pointer-events: none') &&
+    clientCode.includes('[data-composer-card]:hover .dsqe-rzHandle') &&
+    clientCode.includes("[data-composer-card] { position: relative") &&
+    clientCode.includes(".dsqe-rzHandle[data-dragging='true']") &&
+    clientCode.includes("body[data-dsqe-resizing='true'] .dsqe-rzHandle"),
+)
+
 // ---------------------------------------------------------------- withdraw engine
 {
   const wdir = mkdtempSync(join(tmpdir(), 'dsqe-withdraw-'))

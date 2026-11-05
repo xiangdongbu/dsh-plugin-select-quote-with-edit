@@ -591,8 +591,11 @@ body[data-ds-dark-theme] {
 
 /* ---------- 输入框手动调高（composer-resize.ts） ----------
    卡片顶边中央一枚 grip，上拖变高（输入框贴窗口底边）、双击复原；
-   高度写进编辑器滚动区 inline style，持久化在 localStorage。 */
-.dsqe_rzCard { position: relative; }
+   高度写进编辑器滚动区 inline style，持久化在 localStorage。
+   grip 平时隐藏（且不挡鼠标），悬停卡片时浮现；拖拽中保持可见。
+   注意：悬停与定位都挂宿主自己的 [data-composer-card] —— 宿主 React
+   重渲染会重置 className，我们往卡片上加的类随时可能被抹掉。 */
+[data-composer-card] { position: relative; }
 .dsqe-rzHandle {
   position: absolute;
   top: -5px;
@@ -606,6 +609,15 @@ body[data-ds-dark-theme] {
   cursor: ns-resize;
   touch-action: none;
   z-index: 6;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+[data-composer-card]:hover .dsqe-rzHandle,
+.dsqe-rzHandle[data-dragging='true'],
+body[data-dsqe-resizing='true'] .dsqe-rzHandle {
+  opacity: 1;
+  pointer-events: auto;
 }
 .dsqe-rzHandle::after {
   content: '';
