@@ -64,6 +64,10 @@ function toImageRefs(content: unknown): ImageRef[] {
       attachmentId: candidate.attachmentId,
       mediaType: candidate.mediaType,
       ...(typeof candidate.name === 'string' ? { name: candidate.name } : {}),
+      // Verbatim object: the gateway verifies the COMPLETE reference when the
+      // withdrawn image is re-read — a reconstructed subset is rejected with
+      // gateway/input-invalid.
+      full: attachment as Readonly<Record<string, unknown>>,
     })
   }
   return refs
@@ -244,6 +248,15 @@ export function UserMessageView(
     // front (not only after the first hover), so they are always present and
     // inherit the host's own reveal transition — synced with the copy button.
     if (!isQuote) ensureHostButtons(row)
+    if ((globalThis as { __dsqeDebug?: boolean }).__dsqeDebug === true) {
+      const blocks = Array.isArray(node?.data?.content) ? node.data.content : []
+      const imageBlocks = blocks.filter(
+        (block) => (block as { type?: unknown })?.type === 'image',
+      )
+      if (imageBlocks.length > 0) {
+        console.log('[dsqe] node:image-blocks', JSON.stringify(imageBlocks).slice(0, 900))
+      }
+    }
   }, [raw, time, seq])
 
   const scanned = scanQuotes(raw)

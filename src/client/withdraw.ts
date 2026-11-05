@@ -40,8 +40,13 @@ export interface AttachmentReadResult {
 
 export interface SessionLike {
   command?(line: string): Promise<CommandResult>
-  /** Read a durable attachment's bytes (for restoring images on withdraw). */
-  readAttachment?(attachmentId: string): Promise<AttachmentReadResult>
+  /**
+   * Read a durable attachment's bytes (for restoring images on withdraw).
+   * Takes the attachment reference — the COMPLETE object from the content
+   * block (the gateway verifies it verbatim); a bare id string is the
+   * legacy form.
+   */
+  readAttachment?(attachment: ImageAttachmentRef | string): Promise<AttachmentReadResult>
   /** Page history backwards until the loaded window covers `seq`. */
   loadThrough?(seq: number): unknown
 }
@@ -73,6 +78,13 @@ export interface ImageAttachmentRef {
   readonly attachmentId: string
   readonly mediaType: string
   readonly name?: string
+  /**
+   * The attachment object **verbatim** as carried by the content block. The
+   * gateway's storage verification checks the complete reference (width /
+   * height / bytes / …): a subset reconstructed from a few fields is rejected
+   * with `gateway/input-invalid`, so restore must forward this untouched.
+   */
+  readonly full?: Readonly<Record<string, unknown>>
 }
 
 export interface ChatNodeLike {
@@ -179,18 +191,19 @@ export function imagesOfKey(
   const images: ImageAttachmentRef[] = []
   for (const block of content) {
     if (block === null || typeof block !== 'object') continue
-    const candidate = block as { type?: unknown; attachment?: unknown }
-    if (candidate.type !== 'image') continue
-    const attachment = candidate.attachment as
-      | { attachmentId?: unknown; mediaType?: unknown; name?: unknown }
-      | undefined
-    if (typeof attachment?.attachmentId !== 'string') continue
-    if (typeof attachment.mediaType !== 'string') continue
-    images.push({
-      attachmentId: attachment.attachmentId,
-      mediaType: attachment.mediaType,
-      ...(typeof attachment.name === 'string' ? { name: attachment.name } : {}),
-    })
+  const candidate = block as { type?: unknown; attachment?: unknown }
+  if (candidate.type !== 'image') continue
+  const attachment = candidate.attachment as
+    | { attachmentId?: unknown; mediaType?: unknown; name?: unknown }
+    | undefined
+  if (typeof attachment?.attachmentId !== 'string') continue
+  if (typeof attachment.mediaType !== 'string') continue
+  images.push({
+    attachmentId: attachment.attachmentId,
+    mediaType: attachment.mediaType,
+    ...(typeof attachment.name === 'string' ? { name: attachment.name } : {}),
+    full: attachment as Readonly<Record<string, unknown>>,
+  })
   }
   return images
 }
@@ -241,31 +254,70 @@ export async function restoreImages(
     return 0
   }
   const files: File[] = []
+  const dbg = (globalThis as { __dsqeDebug?: boolean }).__dsqeDebug === true
+  const trace = (message: string, details: Record<string, unknown>): void => {
+    if (dbg) console.log(`[dsqe] restore:${message}`, details)
+  }
+  trace('start', {
+    images: images.length,
+    viaActions: canAddViaActions,
+    viaScope: canAddViaScope,
+    readAttachment: session.readAttachment !== undefined,
+    createDrafts: conversation.createDrafts !== undefined,
+  })
   for (const [index, ref] of images.entries()) {
     const extension = IMAGE_MEDIA_EXTENSION[ref.mediaType]
-    if (extension === undefined) continue
+    if (extension === undefined) {
+      trace('bad-media-type', { index, mediaType: ref.mediaType })
+      continue
+    }
     try {
-      const result = await session.readAttachment(ref.attachmentId)
+      // The gateway verifies the COMPLETE reference: forward the attachment
+      // object verbatim (fall back to the typed ref for old registry entries).
+      const result = await session.readAttachment((ref.full ?? ref) as ImageAttachmentRef)
+      const dataLength =
+        result?.value?.data instanceof Uint8Array
+          ? result.value.data.byteLength
+          : result?.value?.data instanceof ArrayBuffer
+            ? result.value.data.byteLength
+            : -1
+      const err = result?.error as
+        | { code?: unknown; message?: unknown; details?: { endpoint?: unknown } }
+        | undefined
+      trace('read', {
+        index,
+        ok: result?.ok,
+        dataLength,
+        id: ref.attachmentId.slice(0, 18),
+        code: err?.code,
+        message: String(err?.message ?? '').slice(0, 300),
+        endpoint: err?.details?.endpoint,
+      })
       if (result?.ok !== true || result.value?.data === undefined) continue
       const name = ref.name ?? `image-${index + 1}.${extension}`
       files.push(new File([result.value.data as BlobPart], name, { type: ref.mediaType }))
-    } catch {
-      // skip this image, keep the rest
+    } catch (error) {
+      trace('read-threw', { index, error: String(error) })
     }
   }
-  if (files.length === 0) return 0
+  if (files.length === 0) {
+    trace('no-files', {})
+    return 0
+  }
   try {
     const drafts = conversation.createDrafts(deps.sessionId, files)
     const ids = drafts.map((draft) => draft.id)
     const admitted = canAddViaActions
       ? deps.addAttachments!(ids)
       : conversation.input!.for(deps.scope).addAttachments(ids)
+    trace('attach', { drafts: drafts.length, admitted })
     if (!admitted) {
       conversation.releaseDraftAttachments?.(drafts)
       return 0
     }
     return drafts.length
-  } catch {
+  } catch (error) {
+    trace('attach-threw', { error: String(error) })
     return 0
   }
 }
@@ -328,10 +380,16 @@ export async function withdrawMessage(deps: WithdrawDeps): Promise<WithdrawOutco
   // Read the message's images before the rewind hides the node. The node view
   // is the most faithful source; the chat snapshot is the fallback.
   let images = deps.getImages?.(deps.flowKey) ?? []
+  let imageSource = 'registry'
   if (images.length === 0) {
     images = imagesOfKey(snapshot, deps.anchorKey)
-    if (images.length === 0) images = imagesOfKey(snapshot, deps.flowKey)
+    imageSource = 'snapshot:anchor'
+    if (images.length === 0) {
+      images = imagesOfKey(snapshot, deps.flowKey)
+      imageSource = 'snapshot:flow'
+    }
   }
+  const dbgLog = (globalThis as { __dsqeDebug?: boolean }).__dsqeDebug === true
   const scope = sessions?.scope?.(deps.sessionId)
   // The conversation service is reached through the session-scoped context in
   // the shipped code (e.g. ui-commands does `binding.ctx.get("conversation")`);
@@ -339,6 +397,16 @@ export async function withdrawMessage(deps: WithdrawDeps): Promise<WithdrawOutco
   const scopeLike = scope as { get?: (name: string) => unknown } | undefined
   const scopedConversation = scopeLike?.get?.('conversation') as ConversationLike | undefined
   const conversation = scopedConversation ?? deps.getConversation?.()
+  if (dbgLog) {
+    console.log('[dsqe] withdraw:images', {
+      count: images.length,
+      via: imageSource,
+      registryRaw: deps.getImages?.(deps.flowKey)?.length,
+      hasConversation: conversation !== undefined,
+      hasAddAttachments: deps.addAttachments !== undefined,
+      hasReadAttachment: session.readAttachment !== undefined,
+    })
+  }
 
   // Dispatch the rewind, then write the draft in the same tick (before awaiting
   // the slow file-restore handler) so the composer updates instantly.
@@ -381,7 +449,7 @@ export async function withdrawMessage(deps: WithdrawDeps): Promise<WithdrawOutco
   if (images.length > 0 && conversation !== undefined) {
     try {
       await waitUntilHidden(deps.getUiConversation, deps.sessionId, seq, 2000)
-      await restoreImages(
+      const restored = await restoreImages(
         {
           sessionId: deps.sessionId,
           session,
@@ -391,9 +459,13 @@ export async function withdrawMessage(deps: WithdrawDeps): Promise<WithdrawOutco
         },
         images,
       )
-    } catch {
+      if (dbgLog) console.log('[dsqe] withdraw:images-restored', { restored })
+    } catch (error) {
+      if (dbgLog) console.log('[dsqe] withdraw:images-threw', String(error))
       // image restore is best-effort
     }
+  } else if (dbgLog && images.length > 0) {
+    console.log('[dsqe] withdraw:images-skipped', { hasConversation: conversation !== undefined })
   }
   return { ok: true, refilled }
 }

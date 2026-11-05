@@ -1103,12 +1103,16 @@ check(
     JSON.stringify(imgs),
   )
   {
-    const seen = { files: [], added: null, released: null }
+    const seen = { files: [], added: null, released: null, readArgs: [] }
     const restoredCount = await restoreImages(
       {
         sessionId: 's1',
         session: {
-          readAttachment: async (id) => ({ ok: true, value: { data: new Uint8Array([id === 'att-1' ? 1 : 2]) } }),
+          readAttachment: async (arg) => {
+            seen.readArgs.push(arg)
+            const id = typeof arg === 'string' ? arg : arg?.attachmentId
+            return { ok: true, value: { data: new Uint8Array([id === 'att-1' ? 1 : 2]) } }
+          },
         },
         scope: { token: 'scope' },
         getConversation: () => ({
@@ -1130,6 +1134,15 @@ check(
       JSON.stringify({ restoredCount, files: seen.files.length, added: seen.added }),
     )
     check('withdraw: restored image File keeps media type', seen.files[1]?.type === 'image/jpeg', seen.files[1]?.type)
+    check(
+      'withdraw: readAttachment receives the COMPLETE attachment reference verbatim',
+      // The gateway's storage verification checks the full reference object
+      // (width/height/bytes/…); a subset reconstructed from a few fields is
+      // rejected with gateway/input-invalid and the image never comes back.
+      seen.readArgs.length === 2 &&
+        seen.readArgs.every((arg, i) => arg === imgs[i].full && arg.attachmentId === imgs[i].attachmentId),
+      JSON.stringify(seen.readArgs),
+    )
   }
   {
     // Preferred path: composer's own inputActions.addAttachments (no scope needed).

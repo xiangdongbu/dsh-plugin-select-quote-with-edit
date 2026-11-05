@@ -15,6 +15,12 @@ export interface ImageRef {
   readonly attachmentId: string
   readonly mediaType: string
   readonly name?: string
+  /**
+   * The attachment object verbatim from the content block. The gateway's
+   * storage verification requires the COMPLETE reference when the withdrawn
+   * image is re-read (a reconstructed subset fails gateway/input-invalid).
+   */
+  readonly full?: Readonly<Record<string, unknown>>
 }
 
 export interface MessageEntry {
