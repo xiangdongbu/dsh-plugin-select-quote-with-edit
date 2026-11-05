@@ -967,17 +967,15 @@ check(
 )
 
 check(
-  'composer grip hides until the card is hovered',
-  // Hidden by default with pointer-events: none (no invisible hot strip over
-  // the composer's top edge); shown on card hover and kept visible while
-  // dragging. Hover keys off the host's own [data-composer-card] attribute —
-  // the host's React re-renders reset className, so a plugin-added class on
-  // the card cannot be relied on.
-  clientCode.includes('pointer-events: none') &&
-    clientCode.includes('[data-composer-card]:hover .dsqe-rzHandle') &&
-    clientCode.includes("[data-composer-card] { position: relative") &&
-    clientCode.includes(".dsqe-rzHandle[data-dragging='true']") &&
-    clientCode.includes("body[data-dsqe-resizing='true'] .dsqe-rzHandle"),
+  'composer grip is invisible but still draggable',
+  // No visible bar at all (user request): the hot strip stays interactive
+  // (ns-resize cursor is the only hint) but renders nothing — content: none
+  // pseudo, no background. Positioning still keys off the host's own
+  // [data-composer-card] attribute (React resets className).
+  clientCode.includes('content: none') &&
+    clientCode.includes('background: none') &&
+    /cursor:\s*ns-resize/.test(clientCode) &&
+    clientCode.includes('[data-composer-card] { position: relative'),
 )
 
 // ---------------------------------------------------------------- withdraw engine
