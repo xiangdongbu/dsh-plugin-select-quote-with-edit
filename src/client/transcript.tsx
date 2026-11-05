@@ -6,6 +6,7 @@ import { locateQuote } from './locate.ts'
 import { pickDelegate } from './host-node.ts'
 import { registerMessage, type ImageRef } from './registry.ts'
 import { ensureHostButtons } from './chrome.ts'
+import { runtime } from './runtime.ts'
 import type { UserMessageProps } from './context.d.ts'
 import { ensureStyles } from './styles.ts'
 import { t } from './i18n.ts'
@@ -255,6 +256,22 @@ export function UserMessageView(
       )
       if (imageBlocks.length > 0) {
         console.log('[dsqe] node:image-blocks', JSON.stringify(imageBlocks).slice(0, 900))
+      }
+    }
+    // Quote-chip messages pollute the host's automatic session title (it is
+    // generated from the first message's full text, protocol block included).
+    // Pin the title to the user's own typed text via the host rename API —
+    // a user-source title makes the automatic generation skip (title-pin.ts).
+    // Only the first user row and only fresh messages, so re-mounts of old
+    // sessions never touch an existing (possibly hand-renamed) title.
+    {
+      const dbg = (globalThis as { __dsqeDebug?: boolean }).__dsqeDebug === true
+      const hasQuotes = scanQuotes(raw).quotes.length > 0
+      if (dbg) console.log('[dsqe] title:gate', { hasQuotes, published: runtime.pinTitle !== null })
+      if (hasQuotes) {
+        const firstUser = document.querySelector('[data-dsqe-user]')
+        const isFirst = firstUser === markerRef.current
+        runtime.pinTitle?.(raw, seq, time, isFirst)
       }
     }
   }, [raw, time, seq])

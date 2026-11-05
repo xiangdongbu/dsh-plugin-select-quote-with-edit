@@ -37,6 +37,14 @@ export const runtime: {
    * no session is bound — the caller then falls back to the local drawer.
    */
   detailOpener: ((text: string, long: boolean) => boolean) | null
+  /**
+   * Pin the session title to the user's own typed text for a quote-chip
+   * message (title-pin.ts): published by the bridge which owns the session
+   * handle; the transcript node view calls it when a chip message renders.
+   */
+  pinTitle:
+    | ((raw: string, seq: number | undefined, time: number | undefined, isFirst: boolean) => void)
+    | null
 } = {
   inputActions: null,
   markFolded: null,
@@ -44,4 +52,5 @@ export const runtime: {
   sessionId: null,
   withdraw: null,
   detailOpener: null,
+  pinTitle: null,
 }

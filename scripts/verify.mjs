@@ -307,6 +307,8 @@ if (zhDict && enDict) {
 // ---------------------------------------------------------------- protocol tests
 const tmp = mkdtempSync(join(tmpdir(), 'dsqe-verify-'))
 const protocol = await compileModule('src/client/protocol.ts', join(tmp, 'protocol.cjs'))
+const titlePin = await compileModule('src/client/title-pin.ts', join(tmp, 'title-pin.cjs'))
+const turnGhost = await compileModule('src/client/turn-ghost.ts', join(tmp, 'turn-ghost.cjs'))
 const {
   composeMessage,
   scanQuotes,
@@ -988,6 +990,17 @@ check(
   clientCode.includes('"conversation.chat.user.before"') &&
     clientCode.includes('kind: "chain", scope: "session"'),
 )
+
+// ---------------------------------------------------------------- title pin + rail ghost
+{
+  const wire = '<dsh-quotes>\n[{"text":"引用","at":0}]\n</dsh-quotes>\n\n帮我分析这个方案的可行性\n第二行'
+  check('title: picks the user\'s own first typed line', titlePin.titleFromRaw(wire) === '帮我分析这个方案的可行性', JSON.stringify(titlePin.titleFromRaw(wire)))
+  check('title: long typed line is capped with an ellipsis', titlePin.titleFromRaw('<dsh-quotes>\n[{"text":"x"}]\n</dsh-quotes>\n\n' + '字'.repeat(80)).length === 60)
+  check('title: plain message (no quotes) is never pinned', titlePin.titleFromRaw('普通消息') === null)
+  check('title: chip-only message (no typed text) is never pinned', titlePin.titleFromRaw('<dsh-quotes>\n[{"text":"长文本"}]\n</dsh-quotes>') === null)
+  // host preview algorithm parity: the rail tooltip must equal previewOfWire exactly
+  check('rail: preview matches the host turn-outline preview algorithm', turnGhost.previewOfWire('a\n\n b   c') === 'a b c' && turnGhost.previewOfWire('字'.repeat(49)) === '字'.repeat(49) && turnGhost.previewOfWire('字'.repeat(60)) === `${'字'.repeat(49)}…`, JSON.stringify([turnGhost.previewOfWire('a\n\n b   c'), turnGhost.previewOfWire('字'.repeat(60))]))
+}
 
 // ---------------------------------------------------------------- withdraw engine
 {

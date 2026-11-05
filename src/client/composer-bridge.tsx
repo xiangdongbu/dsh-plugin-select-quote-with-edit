@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react'
 import { runtime, type ComposerActions } from './runtime.ts'
 import { getMessage } from './registry.ts'
+import { maybePinSessionTitle, type PinTitleSession } from './title-pin.ts'
 import {
   withdrawMessage,
   type ConversationLike,
@@ -43,6 +44,14 @@ export function ComposerBridge(props: {
     runtime.inputActions = actions
     runtime.draft = draft
     runtime.sessionId = sessionId
+    runtime.pinTitle =
+      sessionId === null
+        ? null
+        : (raw: string, seq: number | undefined, time: number | undefined, isFirst: boolean) => {
+            const sessions = services?.sessions?.() as SessionsLike | undefined
+            const session = sessions?.binding?.(sessionId)?.session as PinTitleSession | undefined
+            maybePinSessionTitle(session, sessionId, seq, time, raw, isFirst)
+          }
     runtime.withdraw =
       sessionId === null
         ? null
@@ -70,6 +79,7 @@ export function ComposerBridge(props: {
       if (runtime.sessionId === sessionId) {
         runtime.sessionId = null
         runtime.withdraw = null
+        runtime.pinTitle = null
       }
     }
   })
