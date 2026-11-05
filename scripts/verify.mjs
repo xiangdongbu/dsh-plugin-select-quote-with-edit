@@ -1102,6 +1102,74 @@ check(
       const placed = [0, 4].map((position) => geometry.origin + geometry.pitch * (position === 0 ? 0 : 1))
       check('rail: survivors compact into a contiguous ladder', JSON.stringify(placed) === '[1,11]', JSON.stringify(placed))
     }
+    // End-to-end DOM pass: hide turn 2, then the survivors must sit on a
+    // contiguous ladder (y = 1, 11, 21) instead of keeping the hole at 11.
+    {
+      const pitch = 10
+      const origin = 1
+      const buttonOf = (index) => {
+        const element = {
+          style: { transform: `translate3d(0, ${origin + index * pitch}px, 0)`, display: '', setProperty() {} },
+          attrs: { 'data-index': String(index), 'aria-label': `跳转到第 ${index + 1} 轮` },
+          getAttribute(name) {
+            return this.attrs[name] ?? null
+          },
+          setAttribute(name, value) {
+            this.attrs[name] = String(value)
+          },
+          removeAttribute(name) {
+            delete this.attrs[name]
+          },
+          closest(selector) {
+            return selector === 'nav' ? nav : null
+          },
+        }
+        return element
+      }
+      const tooltip = null
+      const scroller = { scrollHeight: 4 * pitch + 2, clientHeight: 4 * pitch + 2, firstElementChild: null }
+      const nav = { style: {}, firstElementChild: scroller, querySelector: () => tooltip }
+      const buttons = [0, 1, 2, 3].map(buttonOf)
+      const previousDocument = globalThis.document
+      const previousComputed = globalThis.getComputedStyle
+      globalThis.document = {
+        querySelectorAll: () => buttons,
+        querySelector: () => null,
+        body: null,
+      }
+      globalThis.getComputedStyle = () => ({ transform: 'none' })
+      try {
+        const yOf = (button) =>
+          Number(
+            /translate3d\(\s*[^,]+,\s*(-?[\d.]+)px/u.exec(button.style.transform)?.[1] ??
+              /translateY\((-?[\d.]+)px\)/u.exec(button.style.transform)?.[1],
+          )
+        turnGhost.layoutRail([2])
+        check(
+          'rail: hidden mark is removed from the ladder and survivors reflow',
+          buttons[1].attrs['data-dsqe-ghost'] === 'true' &&
+            buttons[1].style.display === 'none' &&
+            [0, 2, 3].map((index) => yOf(buttons[index])).join(',') === '1,11,21',
+          JSON.stringify(buttons.map((button) => button.style.transform)),
+        )
+        check(
+          'rail: the rail is nudged back to the visual centre after reflow',
+          nav.style.marginTop === '5px',
+          String(nav.style.marginTop),
+        )
+        turnGhost.layoutRail([])
+        check(
+          'rail: clearing the ghosts restores the original pitch and centring',
+          [0, 1, 2, 3].map((index) => yOf(buttons[index])).join(',') === '1,11,21,31' &&
+            nav.style.marginTop === '' &&
+            buttons[1].style.display === '',
+          JSON.stringify({ top: nav.style.marginTop, ys: buttons.map((button) => yOf(button)) }),
+        )
+      } finally {
+        globalThis.document = previousDocument
+        globalThis.getComputedStyle = previousComputed
+      }
+    }
     // Old preview-matching ledgers held wrong turns (they hid the marks that
     // had NOT been withdrawn) — 0.7.16 reads a fresh key and purges the old.
     check(

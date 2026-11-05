@@ -367,10 +367,19 @@ function railTurnsOf(): number[] {
   }
 }
 
-/** 标记在 rail 上的当前纵向偏移（宿主虚拟列表写的是 inline transform）。 */
+/**
+ * 标记在 rail 上的当前纵向偏移。宿主的虚拟列表（`directDomUpdatesMode:
+ * 'transform'`）写的是 inline `translate3d(0, <y>px, 0)`，本模块重排时写
+ * inline `translateY(<y>px)`——两种都要认；都没有才退回 computed matrix
+ * （注意 `display:none` 的元素 computed 是 `none`，所以 inline 优先）。
+ */
 function translateYOf(element: HTMLElement): number | undefined {
-  const inline = /translateY\((-?[\d.]+)px\)/u.exec(element.style.transform)
-  if (inline !== null) return Number(inline[1])
+  const inline = element.style.transform
+  // 宿主的写法是 `translate3d(0, 31px, 0)`——第一个分量没有单位，别要求 px。
+  const three = /translate3d\(\s*[^,]+,\s*(-?[\d.]+)px/u.exec(inline)
+  if (three !== null) return Number(three[1])
+  const flat = /translateY\((-?[\d.]+)px\)/u.exec(inline)
+  if (flat !== null) return Number(flat[1])
   const matrix = /matrix\(([^)]+)\)/u.exec(getComputedStyle(element).transform)
   if (matrix === null) return undefined
   const parts = matrix[1].split(',').map((value) => Number(value.trim()))
@@ -385,6 +394,8 @@ interface MarkView {
   readonly button: HTMLButtonElement
   readonly index: number
   readonly ghost: boolean
+  /** 隐藏/重排之前的原始纵向偏移（inline transform 实测）。 */
+  readonly y?: number
 }
 
 /**
@@ -426,24 +437,36 @@ export function railGeometry(
 function compactMarks(views: readonly MarkView[], pitch: number | null, origin: number | null): void {
   if (views.length === 0) return
   const frame = views[0].button.closest('nav')
+  /** 放弃重排时也要把上次的居中补偿清掉，别把整条 rail 留在移位状态。 */
+  const resetShift = (): void => {
+    if (frame !== null) frame.style.marginTop = ''
+  }
   // 虚拟窗口裁掉了一部分标记时索引不连续，重排会算错位置——不碰。
   const contiguous = views.every((view, position) => view.index === position)
-  if (!contiguous) return
+  if (!contiguous) {
+    resetShift()
+    return
+  }
   // 概览条内部滚动时（>40 轮）虚拟列表会持续改写 transform，重排会打架。
-  const scroller =
-    frame === null ? null : (frame.firstElementChild as HTMLElement | null)
-  if (scroller !== null && scroller.scrollHeight > scroller.clientHeight + 1) return
+  const scroller = frame === null ? null : (frame.firstElementChild as HTMLElement | null)
+  if (scroller !== null && scroller.scrollHeight > scroller.clientHeight + 1) {
+    resetShift()
+    return
+  }
 
   let measuredPitch = pitch
   let measuredOrigin = origin
   const points: { index: number; y: number }[] = []
   for (const view of views) {
     if (view.button.getAttribute('data-dsqe-compact') === '1') continue
-    const y = translateYOf(view.button)
+    const y = view.y ?? translateYOf(view.button)
     if (y !== undefined) points.push({ index: view.index, y })
   }
   const geometry = railGeometry(points, measuredPitch, measuredOrigin)
-  if (geometry === null) return
+  if (geometry === null) {
+    resetShift()
+    return
+  }
   measuredPitch = geometry.pitch
   measuredOrigin = geometry.origin
   pitchCache = measuredPitch
@@ -453,7 +476,7 @@ function compactMarks(views: readonly MarkView[], pitch: number | null, origin: 
   for (const view of views) {
     if (view.ghost) continue
     const y = measuredOrigin + measuredPitch * rank
-    const current = translateYOf(view.button)
+    const current = view.y ?? translateYOf(view.button)
     if (current === undefined || Math.abs(current - y) > 0.05) {
       view.button.style.transform = `translateY(${y}px)`
       view.button.setAttribute('data-dsqe-compact', '1')
@@ -480,27 +503,42 @@ function compactMarks(views: readonly MarkView[], pitch: number | null, origin: 
   }
 }
 
-/** 把当前会话记账轮次的标记按钮藏掉并重排；顺带节流补扫快照。 */
-function applyGhostFilter(): void {
-  if (bound === null) return
-  const ghosts = ghostTurnsOf(bound.sessionId)
+/**
+ * DOM 侧动作：把 `ghosts` 里的轮次标记藏掉，并把剩下的重排到连续格子上。
+ * 抽出来是为了能直接单测（不依赖快照/账本）。
+ */
+export function layoutRail(ghosts: readonly number[]): void {
   const views: MarkView[] = []
+  // 先把几何量下来，再动手隐藏：`display:none` 之后 computed transform 是
+  // none，只有 inline 还能读（所以 translateYOf 优先 inline）。
   for (const button of markButtons()) {
     const turn = turnOfButton(button)
     if (turn === undefined) continue
-    const ghost = ghosts.includes(turn)
-    if (ghost) {
-      button.style.display = 'none'
-      button.setAttribute('data-dsqe-ghost', 'true')
-    } else if (button.getAttribute('data-dsqe-ghost') === 'true') {
-      button.style.display = ''
-      button.removeAttribute('data-dsqe-ghost')
-    }
     const index = Number(button.getAttribute('data-index') ?? String(views.length))
-    views.push({ button, index: Number.isFinite(index) ? index : views.length, ghost })
+    views.push({
+      button,
+      index: Number.isFinite(index) ? index : views.length,
+      ghost: ghosts.includes(turn),
+      y: translateYOf(button),
+    })
   }
   views.sort((left, right) => left.index - right.index)
+  for (const view of views) {
+    if (view.ghost) {
+      view.button.style.display = 'none'
+      view.button.setAttribute('data-dsqe-ghost', 'true')
+    } else if (view.button.getAttribute('data-dsqe-ghost') === 'true') {
+      view.button.style.display = ''
+      view.button.removeAttribute('data-dsqe-ghost')
+    }
+  }
   compactMarks(views, pitchCache, originCache)
+}
+
+/** 把当前会话记账轮次的标记藏掉并重排；顺带节流补扫快照。 */
+function applyGhostFilter(): void {
+  if (bound === null) return
+  layoutRail(ghostTurnsOf(bound.sessionId))
   if (Date.now() - lastSyncAt > SYNC_THROTTLE_MS) syncNow()
 }
 

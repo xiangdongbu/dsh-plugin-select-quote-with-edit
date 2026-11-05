@@ -21,7 +21,6 @@ import { watchComposerResize } from './composer-resize.ts'
 import { watchQuotePaste } from './paste.ts'
 import { registerQuoteSource, watchChipDeletion } from './inline-chips.ts'
 import { watchChipClipboard } from './chip-clipboard.ts'
-import { installDiag } from './diag.ts'
 
 /**
  * Browser half of dsh-plugin-select-quote-with-edit — the two features in one
@@ -275,5 +274,4 @@ export function apply(ctx: ClientContext): void {
   // Composer grip: drag the input taller, double-click resets (plain DOM).
   ctx.effect(() => watchComposerResize(), 'select-quote-with-edit: composer resize')
 
-  installDiag(ctx as unknown as Record<string, unknown>)
 }
