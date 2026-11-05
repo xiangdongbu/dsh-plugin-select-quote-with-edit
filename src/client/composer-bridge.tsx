@@ -2,6 +2,7 @@ import React, { useEffect } from 'react'
 import { runtime, type ComposerActions } from './runtime.ts'
 import { getMessage } from './registry.ts'
 import { maybePinSessionTitle, type PinTitleSession } from './title-pin.ts'
+import { healGhostBookkeeping } from './turn-ghost.ts'
 import {
   withdrawMessage,
   type ConversationLike,
@@ -29,6 +30,9 @@ export interface WithdrawServices {
  * message, and the paste interceptor can append when needed. It also publishes
  * the ↶ withdraw engine bound to the current session.
  */
+/** Deferred ghost-heal retry timer (module-level: cleared across re-renders). */
+let pendingHealTimer: number | undefined
+
 export function ComposerBridge(props: {
   useInput?: <T>(selector: (state: { draft: string; draftRev: number }) => T) => T
   inputActions?: ComposerActions
@@ -73,6 +77,18 @@ export function ComposerBridge(props: {
                 runtime.inputActions?.setDraft(text)
               },
             })
+    // 自愈：会话绑定时扫描快照里被撤回（遮蔽）的用户消息，补记概览条幽灵。
+    // 快照可能晚于绑定就绪，延迟一次重试。
+    if (sessionId !== null) {
+      const getUi = () => services?.uiConversation?.() as UiConversationLike | undefined
+      healGhostBookkeeping(sessionId, getUi)
+      const retry = window.setTimeout(() => {
+        healGhostBookkeeping(sessionId, getUi)
+      }, 2500)
+      pendingHealTimer = retry
+    } else {
+      window.clearTimeout(pendingHealTimer)
+    }
     return () => {
       if (runtime.inputActions === actions) runtime.inputActions = null
       if (runtime.draft === draft) runtime.draft = null

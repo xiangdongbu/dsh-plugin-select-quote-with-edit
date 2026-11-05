@@ -110,7 +110,14 @@ export function composeMessage(
   // `</dsh-quotes>` would close the block early. JSON.parse restores it.
   const json = JSON.stringify(payload).replace(/</g, '\\u003c')
   const block = [PROTOCOL_HEADER, '', QUOTES_OPEN, json, QUOTES_CLOSE].join('\n')
-  return rest ? `${block}\n\n${rest}` : `${block}\n\n`
+  // The block rides at the END of the wire text. Host surfaces that preview
+  // the message verbatim (the turn-navigation rail tooltip, the automatic
+  // session title) read the START of the content — a leading block would make
+  // every quote message announce "# Quoted references: Each item…" instead of
+  // the user's own words. `blockParts` locates the markers anywhere, so every
+  // parser here stays position-independent (0.7.14+; older messages with a
+  // leading block keep parsing).
+  return rest ? `${rest}\n\n${block}` : block
 }
 
 /**

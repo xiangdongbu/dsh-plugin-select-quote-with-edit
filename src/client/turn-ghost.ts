@@ -16,10 +16,12 @@
  * MutationObserver 持续把幽灵轮次的标记按钮 `display: none`（React
  * 重渲染后再次隐藏）。
  */
+import { chatSnapshotOf, type UiConversationLike } from './withdraw.ts'
 import { runtime } from './runtime.ts'
 
 const GHOST_KEY = 'dsqe-ghost-turns'
 const PENDING_KEY = 'dsqe-ghost-pending'
+const HEALED_KEY = 'dsqe-ghost-healed'
 /** 与宿主 `dsh-session-turn-outline` 的 PROMPT_PREVIEW_LIMIT 一致。 */
 const PREVIEW_LIMIT = 50
 /** 待匹配的重试间隔（observer 回调触发频繁，节流匹配尝试）。 */
@@ -39,21 +41,42 @@ export function previewOfWire(raw: string): string {
   return normalized
 }
 
-function readJson<T>(key: string, fallback: T): T {
+/**
+ * localStorage 的带内存镜像读写：无 localStorage 的环境（单测、受限容器）
+ * 退化为内存存储，记账逻辑照常可测、可运行。
+ */
+const memoryStore: Record<string, string> = {}
+
+function lsGet(key: string): string | null {
   try {
     const stored = localStorage.getItem(key)
-    return stored === null ? fallback : (JSON.parse(stored) as T)
+    return stored === null ? (memoryStore[key] ?? null) : stored
+  } catch {
+    return memoryStore[key] ?? null
+  }
+}
+
+function lsSet(key: string, value: string): void {
+  memoryStore[key] = value
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // localStorage 满了就只用内存镜像（最坏情况是重启后记账失效）
+  }
+}
+
+function readJson<T>(key: string, fallback: T): T {
+  const stored = lsGet(key)
+  if (stored === null) return fallback
+  try {
+    return JSON.parse(stored) as T
   } catch {
     return fallback
   }
 }
 
 function writeJson(key: string, value: unknown): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(value))
-  } catch {
-    // localStorage 满了就放弃记账（最坏情况是本轮过滤失效）
-  }
+  lsSet(key, JSON.stringify(value))
 }
 
 function ghostsFor(sessionId: string): number[] {
@@ -79,6 +102,11 @@ interface PendingEntry {
 
 function pendingList(): PendingEntry[] {
   return readJson<PendingEntry[]>(PENDING_KEY, [])
+}
+
+/** 调试/测试钩子：当前待匹配账本。 */
+export function pendingEntriesOf(sessionId: string): PendingEntry[] {
+  return pendingList().filter((entry) => entry.sessionId === sessionId)
 }
 
 function writePending(list: PendingEntry[]): void {
@@ -127,6 +155,68 @@ export function ghostWithdrawnTurn(sessionId: string, previewText: string): void
   }
 }
 
+/** 文本块拼接（宿主 rail 预览的输入与消息 content 的文本块一致）。 */
+function textOfContent(content: unknown): string {
+  if (!Array.isArray(content)) return ''
+  const parts: string[] = []
+  for (const block of content) {
+    if (block !== null && typeof block === 'object' && (block as { type?: unknown }).type === 'text') {
+      parts.push(String((block as { text?: unknown }).text ?? ''))
+    }
+  }
+  return parts.join(' ')
+}
+
+/**
+ * 开账自愈：扫描会话快照里被遮蔽（visibility=hidden）的用户消息，把它们的
+ * rail 预览补记入待匹配账本。覆盖所有「撤回发生在记账逻辑之外」的场景——
+ * 旧版本撤回的、桌面端还没重启就撤回的——否则那些幽灵标记永远留在概览条上。
+ * 按 seq 记账去重（dsqe-ghost-healed），只在会话绑定变化时调用。
+ */
+export function healGhostBookkeeping(
+  sessionId: string,
+  getUiConversation: () => UiConversationLike | undefined,
+): void {
+  try {
+    const snapshot = chatSnapshotOf(getUiConversation(), sessionId)
+    const nodes = snapshot?.nodes
+    if (nodes === undefined || typeof nodes.values !== 'function') return
+    const healed = readJson<Record<string, number[]>>(HEALED_KEY, {})
+    const done = healed[sessionId] ?? []
+    let changed = false
+    for (const node of nodes.values()) {
+      if (node?.visibility !== 'hidden') continue
+      const key = String((node as { key?: unknown }).key ?? '')
+      // 用户消息行的 key 形如 `13:input-message<uuid>`；撤回目标之后的助手
+      // 行也被遮蔽，但它们不该进概览条记账。
+      if (!key.includes('input-message')) continue
+      const seq = (node as { data?: { seq?: unknown } }).data?.seq
+      if (typeof seq !== 'number') continue
+      if (done.includes(seq)) continue
+      const preview = previewOfWire(textOfContent(node.data?.content))
+      if (preview === '') continue
+      done.push(seq)
+      changed = true
+      const list = pendingList().filter((entry) => entry.sessionId !== sessionId || entry.preview !== preview)
+      list.push({ sessionId, preview })
+      writePending(list)
+      const dbg = (globalThis as { __dsqeDebug?: boolean }).__dsqeDebug === true
+      if (dbg) console.log('[dsqe] rail:heal', { sessionId: sessionId.slice(0, 12), seq, preview })
+    }
+    if (changed) {
+      const keys = Object.keys(healed)
+      const trimmed =
+        keys.length > MAX_RECORDS
+          ? Object.fromEntries(keys.slice(-MAX_RECORDS).map((k) => [k, healed[k]]))
+          : healed
+      trimmed[sessionId] = done.slice(-200)
+      writeJson(HEALED_KEY, trimmed)
+    }
+  } catch {
+    // 自愈是纯体验优化，任何失败都静默
+  }
+}
+
 /** 尝试把待匹配预览对到 rail 标记上：命中即转正为幽灵记账。 */
 async function tryMatchPending(): Promise<void> {
   const sessionId = runtime.sessionId
@@ -138,7 +228,15 @@ async function tryMatchPending(): Promise<void> {
   for (const button of buttons) {
     const shown = await previewOfMark(button)
     if (shown === null) continue
-    const hit = pending.find((entry) => entry.preview === shown)
+    // 精确匹配优先；前缀兜底——宿主对 loaded 轮次的预览截断路径可能与
+    // outline 的 50 字符算法略有出入。
+    const hit =
+      pending.find((entry) => entry.preview === shown) ??
+      pending.find(
+        (entry) =>
+          entry.preview.slice(0, 30) === shown.slice(0, 30) ||
+          shown.startsWith(entry.preview.slice(0, 30)),
+      )
     if (hit === undefined) continue
     const turn = turnOfButton(button)
     if (turn === undefined) return

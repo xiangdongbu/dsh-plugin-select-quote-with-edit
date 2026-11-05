@@ -25,7 +25,7 @@
  * editor rejects the edit, callers fall back to the original chip row.
  */
 
-import { chipLabel, CHIP_PLACEHOLDER, DRAFT_MARKER, QUOTE_MARK, type Quote } from './protocol.ts'
+import { chipLabel, composeMessage, CHIP_PLACEHOLDER, DRAFT_MARKER, QUOTE_MARK, type Quote } from './protocol.ts'
 import { getQuotes, removeQuote, replaceQuotes } from './store.ts'
 
 /** The host's inline reference node type (see the conversation package). */
@@ -1469,11 +1469,15 @@ function openQuote(id: string, openers: QuoteOpeners): boolean {
 
 /**
  * Last-resort serializer: only reached when a chip survives to submit without
- * the fold step (another send path). Keeping it readable is better than
- * rejecting the message.
+ * the fold step (another send path — e.g. the queue button). Emit the real
+ * `<dsh-quotes>` protocol block (not an inline `<quote>` copy): everything
+ * downstream — the bubble, the withdraw refill, the title pin, the rail
+ * preview parity — keys off that block, and an inline copy of the long body
+ * would surface verbatim in host previews (the "# Quoted references…" rail
+ * tooltip) instead of staying folded.
  */
 function serializeQuote(ref: string): string {
   const quote = getQuotes().find((item) => item.id === ref)
   if (!quote) return ''
-  return `\n<quote>\n${quote.text}\n</quote>\n`
+  return composeMessage('', [quote])
 }

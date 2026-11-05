@@ -411,9 +411,11 @@ const {
   )
   check(
     'inline chip placeholders are stripped before the message is composed',
+    // 0.7.14+: the protocol block rides at the END of the wire text, so the
+    // user's own text comes first on every host preview surface.
     composeMessage(`${protocol.CHIP_PLACEHOLDER}正文${protocol.CHIP_PLACEHOLDER}`, [
       { id: 'q7', text: '引用' },
-    ]).endsWith('正文') &&
+    ]).startsWith('正文\n\n') &&
       !composeMessage(`${protocol.CHIP_PLACEHOLDER}正文`, [{ id: 'q8', text: 'x' }]).includes(
         protocol.CHIP_PLACEHOLDER,
       ),
@@ -998,6 +1000,49 @@ check(
   check('title: long typed line is capped with an ellipsis', titlePin.titleFromRaw('<dsh-quotes>\n[{"text":"x"}]\n</dsh-quotes>\n\n' + '字'.repeat(80)).length === 60)
   check('title: plain message (no quotes) is never pinned', titlePin.titleFromRaw('普通消息') === null)
   check('title: chip-only message (no typed text) is never pinned', titlePin.titleFromRaw('<dsh-quotes>\n[{"text":"长文本"}]\n</dsh-quotes>') === null)
+  // 0.7.14+: the protocol block rides at the wire END, so the host's verbatim
+  // preview surfaces (rail tooltip, session title) now read the user's words.
+  {
+    const wire = protocol.composeMessage('帮我运行 ls', [
+      { id: 'q9', text: '# Quoted references: 长文本开头也要让位' },
+    ])
+    check(
+      'wire: the user\'s own text opens the message (protocol block trails)',
+      wire.startsWith('帮我运行 ls\n\n# Quoted references:') && wire.trimEnd().endsWith('</dsh-quotes>'),
+      JSON.stringify(wire.slice(0, 60)),
+    )
+    check(
+      'rail: collapsed preview of the new wire starts with the typed text',
+      turnGhost.previewOfWire(wire).startsWith('帮我运行 ls'),
+      turnGhost.previewOfWire(wire),
+    )
+  }
+  // heal bookkeeping: hidden (withdrawn) user nodes enter the pending list
+  {
+    const healSnapshot = {
+      nodes: new Map([
+        ['7:input-message-abc', { visibility: 'hidden', key: '7:input-message-abc', data: { seq: 7, content: [{ type: 'text', text: '被撤回的引用消息' }] } }],
+        ['8:assistant-def', { visibility: 'hidden', key: '["8:assistant-def"]', data: { seq: 8, content: [{ type: 'text', text: '被撤回的回复' }] } }],
+        ['9:input-message-ghi', { visibility: 'visible', key: '9:input-message-ghi', data: { seq: 9, content: [{ type: 'text', text: '留下的消息' }] } }],
+      ]),
+      order: ['7:input-message-abc', '8:assistant-def', '9:input-message-ghi'],
+    }
+    const getUi = () => ({ binding: () => ({ target: () => ({ getSnapshot: () => healSnapshot }) }) })
+    turnGhost.healGhostBookkeeping('sess-heal', getUi)
+    const pending1 = turnGhost.pendingEntriesOf('sess-heal')
+    check(
+      'rail: heal records hidden user messages as pending ghosts (assistant rows skipped)',
+      pending1 !== null && pending1.length === 1 && pending1[0].preview === '被撤回的引用消息' && pending1[0].sessionId === 'sess-heal',
+      JSON.stringify(pending1),
+    )
+    turnGhost.healGhostBookkeeping('sess-heal', getUi)
+    const pending2 = turnGhost.pendingEntriesOf('sess-heal')
+    check(
+      'rail: heal is seq-deduped across repeated scans',
+      pending2 !== null && pending2.length === 1,
+      JSON.stringify(pending2),
+    )
+  }
   // host preview algorithm parity: the rail tooltip must equal previewOfWire exactly
   check('rail: preview matches the host turn-outline preview algorithm', turnGhost.previewOfWire('a\n\n b   c') === 'a b c' && turnGhost.previewOfWire('字'.repeat(49)) === '字'.repeat(49) && turnGhost.previewOfWire('字'.repeat(60)) === `${'字'.repeat(49)}…`, JSON.stringify([turnGhost.previewOfWire('a\n\n b   c'), turnGhost.previewOfWire('字'.repeat(60))]))
 }
