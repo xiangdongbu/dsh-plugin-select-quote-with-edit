@@ -767,6 +767,11 @@ check(
   clientCode.includes('dsqe_rowQuote') && !clientCode.includes('dsqe_rowPad'),
 )
 check(
+  'rows using the plugin overlay row reserve the same band (hover never covers text)',
+  clientCode.includes('.dsqe_rowOwnActions { padding-bottom: calc(28px') &&
+    (clientCode.match(/dsqe_rowOwnActions/gu) ?? []).length >= 4,
+)
+check(
   'sent quote bubble no longer duplicates the quote body text',
   !clientCode.includes('dsqe-quoteBody'),
 )

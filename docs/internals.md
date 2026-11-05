@@ -174,3 +174,4 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 | 全选删除要按两下（第一下只删文字或只删胶囊） | 宿主的删除路径只走文本节点、不碰元素型 chip，所以两边的删除必须各管一段，且**不能互相打断**：`preventDefault` 会连宿主的文字删除一起挡掉（`execCommand('delete')` 宿主根本不听），而在 `setTimeout` 里补删 chip 会被宿主 pending 的 edit 吞掉。现在的做法是 keydown 里**同步**删 chip、不拦截默认删除；IME / `insertText` 覆盖选区的路径没有可打印 keydown，靠 `beforeinput` 补一遍 |
 | 侧栏详情滚动时顶部漏出一行内容 | 滚动容器是不是带了 `padding-top`：sticky 卡头贴 scrollport、内边距留在它上方，内容就从缝里过去。`.dsqe-paneBody` 必须 `padding: 0 12px 20px`，间距交给 `.dsqe-fileCard` 的 `margin-top` |
 | 插入胶囊后打的字跑到下一行 | 胶囊是否被直接塞进 root（应走 `placeInBlock`）；光标有没有 U+200B 文本节点落脚 |
+| 悬停操作行压住气泡最后一行文字 | `.dsqe_actions` 是 `position: absolute; top: calc(100% - 28px + 4px)`，它假定该行**永久**预留 28px 操作带。宿主原生操作行（`[data-clock]` 容器）挂不上时（插话/steering 气泡、引用气泡、委托失败的行）走的是插件自绘浮层，这类行必须同时打上 `.dsqe_rowOwnActions`（`ensureHostButtons()` 返回 false 即打，成功则摘掉）——`.dsqe_rowQuote` 只管引用气泡。漏打就是「悬停压字」；打了但没摘会让挂载成功的行凭空多出 28px（消息间空档变大） |

@@ -79,6 +79,10 @@ body[data-ds-dark-theme] {
    row's height permanently. The row is shown/hidden on hover without changing
    layout, which keeps messages from jumping when the pointer enters/leaves. */
 .dsqe_rowQuote { padding-bottom: calc(28px + var(--dsh-content-font-delta, 0px)) !important; }
+/* A row that ends up with the plugin's OWN overlay row (no host [data-clock]
+   container to hang the buttons on) reserves the same band, or the overlay
+   would sit on top of the bubble's last line. */
+.dsqe_rowOwnActions { padding-bottom: calc(28px + var(--dsh-content-font-delta, 0px)) !important; }
 .dsqe_rowEditing .dsqe_marker { display: none; }
 .dsqe_marker { display: contents; }
 
@@ -869,8 +873,10 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
   max-width: 76%;
   padding: 10px 16px;
   border-radius: 22px;
-  background: var(--dsqe-chip-bg);
-  color: var(--dsqe-label);
+  /* Delegation failed (host view not identifiable) — keep the host's own user
+     bubble token so the row still looks like a message, not like a chip. */
+  background: var(--dsw-specific-bubble, var(--dsqe-chip-bg));
+  color: var(--dsw-alias-label-primary, var(--dsqe-label));
   font-size: 14px;
   line-height: 22px;
   overflow-wrap: anywhere;

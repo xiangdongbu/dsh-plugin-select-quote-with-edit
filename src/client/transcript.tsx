@@ -248,7 +248,13 @@ export function UserMessageView(
     // Plain messages: place edit + undo next to the native copy button up
     // front (not only after the first hover), so they are always present and
     // inherit the host's own reveal transition — synced with the copy button.
-    if (!isQuote) ensureHostButtons(row)
+    if (!isQuote) {
+      // Rows that keep the plugin's own overlay row reserve its band, or the
+      // buttons land on the bubble's last line (steering rows, host rows whose
+      // actions container is not reachable).
+      const placed = ensureHostButtons(row)
+      row.classList.toggle('dsqe_rowOwnActions', !placed)
+    }
     if ((globalThis as { __dsqeDebug?: boolean }).__dsqeDebug === true) {
       const blocks = Array.isArray(node?.data?.content) ? node.data.content : []
       const imageBlocks = blocks.filter(

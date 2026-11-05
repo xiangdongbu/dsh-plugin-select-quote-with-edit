@@ -348,11 +348,15 @@ function showActions(row: HTMLElement): void {
   // add the pencil + undo to it. They are NOT removed on leave — they live in
   // the host's own `[data-clock]` container, so the host's reveal transition
   // shows/hides them together with the native copy button (same sync).
-  if (ensureHostButtons(row)) return
+  if (ensureHostButtons(row)) {
+    row.classList.remove('dsqe_rowOwnActions')
+    return
+  }
   // Quote bubbles are plugin-drawn with no host row: keep the plugin's own
-  // action row (time / copy / edit / undo) under the bubble. The row already
-  // reserves this height via .dsqe_rowQuote, so showing the overlay never
-  // changes layout (no message jump).
+  // action row (time / copy / edit / undo) under the bubble. The row reserves
+  // this height permanently (.dsqe_rowQuote for quotes, .dsqe_rowOwnActions
+  // for other rows), so showing the overlay never changes layout.
+  row.classList.add('dsqe_rowOwnActions')
   if (actionsEl === null) buildActions()
   timeEl!.textContent = formatTime(entry.time)
   timeEl!.style.display = timeEl!.textContent === '' ? 'none' : ''
