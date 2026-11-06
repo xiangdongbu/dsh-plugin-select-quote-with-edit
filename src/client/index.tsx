@@ -18,6 +18,7 @@ import { pickDelegate } from './host-node.ts'
 import { runtime } from './runtime.ts'
 import { syncGhostsSoon } from './turn-ghost.ts'
 import { watchComposerResize } from './composer-resize.ts'
+import { recordWideTableMetrics } from './wide-tables.ts'
 import { watchQuotePaste } from './paste.ts'
 import { registerQuoteSource, watchChipDeletion } from './inline-chips.ts'
 import { watchChipClipboard } from './chip-clipboard.ts'
@@ -273,5 +274,8 @@ export function apply(ctx: ClientContext): void {
 
   // Composer grip: drag the input taller, double-click resets (plain DOM).
   ctx.effect(() => watchComposerResize(), 'select-quote-with-edit: composer resize')
+
+  // TEMP(0.7.21): wide-markdown-table box metrics -> localStorage.
+  recordWideTableMetrics()
 
 }

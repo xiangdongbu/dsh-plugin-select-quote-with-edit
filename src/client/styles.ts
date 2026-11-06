@@ -898,8 +898,9 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
   padding-bottom: 0 !important;
 }
 .md-table-wide table {
-  width: auto !important;
+  width: 100% !important;
   max-width: 100% !important;
+  table-layout: auto;
 }
 .md-table-wide :is(th, td) {
   min-width: 0 !important;
