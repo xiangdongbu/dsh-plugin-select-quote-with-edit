@@ -38,31 +38,42 @@ function columnWidthOf(wrapper: HTMLElement): number {
 function clamp(wrapper: HTMLElement): void {
   const width = columnWidthOf(wrapper)
   if (width === 0) return
-  if (wrapper.dataset[APPLIED] === String(width)) return
-  wrapper.dataset[APPLIED] = String(width)
-  for (const [property, value] of [
-    ['width', `${width}px`],
-    ['max-width', `${width}px`],
-    ['min-width', `${width}px`],
-    ['box-sizing', 'border-box'],
-    ['overflow-x', 'auto'],
-  ] as const) {
-    wrapper.style.setProperty(property, value, 'important')
-  }
-  // 宿主正文是 `display: flex` 的容器（XNZzAa_body），宽表格作为 flex 项会被
-  // 交叉轴对齐到右边——宽度钉住后它就整体往左溢出去了。这里显式左对齐。
-  wrapper.style.setProperty('align-self', 'flex-start', 'important')
-  wrapper.style.setProperty('margin-left', '0', 'important')
-  wrapper.style.setProperty('margin-right', 'auto', 'important')
   const table = wrapper.querySelector('table')
-  if (table instanceof HTMLElement) {
-    // 像素而非 100%：百分比会落到更窄的包含块上，把表格压成 min-content。
+  if (!(table instanceof HTMLElement)) return
+
+  if (wrapper.dataset[APPLIED] !== String(width)) {
+    wrapper.dataset[APPLIED] = String(width)
+    for (const [property, value] of [
+      ['width', `${width}px`],
+      ['max-width', `${width}px`],
+      ['min-width', `${width}px`],
+      ['box-sizing', 'border-box'],
+      ['padding', '0'],
+      ['margin', '0'],
+      ['display', 'block'],
+      ['overflow', 'visible'],
+    ] as const) {
+      wrapper.style.setProperty(property, value, 'important')
+    }
     table.style.setProperty('width', `${width}px`, 'important')
     table.style.setProperty('min-width', `${width}px`, 'important')
     table.style.setProperty('max-width', `${width}px`, 'important')
   }
-  // 之前溢出时被滚动过的话，回到左端，否则看起来还是「偏出左边」。
-  if (wrapper.scrollLeft !== 0) wrapper.scrollLeft = 0
+
+  // 最后一步按几何对齐：不管宿主包装层里夹了什么（内联块、占位、边距），
+  // 直接把表格左边缘挪到包装层（= 正文列）的左边缘。用 margin-left 负值抵消，
+  // 不做 DOM 搬迁——移动 React 托管的节点会在卸载时炸掉宿主视图。
+  const column =
+    wrapper.closest<HTMLElement>('[class*="markdown"]') ??
+    wrapper.parentElement ??
+    wrapper
+  const offset = Math.round(
+    column.getBoundingClientRect().left - table.getBoundingClientRect().left,
+  )
+  const current = Number.parseFloat(table.style.marginLeft || '0')
+  if (Math.abs(offset) > 1 && current !== offset) {
+    table.style.setProperty('margin-left', `${offset}px`, 'important')
+  }
 }
 
 /**
