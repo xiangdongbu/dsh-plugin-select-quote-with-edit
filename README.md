@@ -110,9 +110,12 @@ dsh web --patch "$PWD/dev.patch.yml"
 ## 本地验证
 
 ```bash
-npm run check        # typecheck + build + 114 项无头校验
+npm run check        # typecheck + build + 146 项无头校验
+npm run doctor       # 体检：仓库构建 / 已安装副本 / profile 依赖锁定 三者是否一致
 npm run mock         # mock 宿主 + http://127.0.0.1:4173/test/mock/app.html
 ```
+
+**装到客户端之后再改代码，`sync:desktop` 不是永久的**：桌面端 profile 的依赖是 pnpm 从 GitHub 装的（`github:xiangdongbu/dsh-plugin-select-quote-with-edit`），锁文件里钉着一个具体 commit。插件管理器**每次装/卸任何插件都会重跑 install**，把你 `sync:desktop` 推上去的 `node_modules/<包名>` 整目录还原成锁文件里的那个 commit——表现就是「刚刚还好好的，装了别的插件/重启一下，编辑撤回按钮又没了」。`npm run doctor` 会直接点出这种情况：已安装副本与仓库构建不同字节、或锁文件钉的不是本地 HEAD 时，它会告诉你怎么改 profile 依赖（把 spec 改成 `github:<owner>/<repo>#<本地HEAD>`）。
 
 mock 宿主复刻 dsh web 客户端 DOM 约定（composer 卡片、lexical 编辑器、flow-key 消息行、宿主悬停操作行、发送回显、slot 注册表），并内置 priority -10 的模拟消息插件视图（`?fakequote=1`）验证委托共存；`sessions` / `uiConversation` 服务则模拟回退引擎执行 `/rewind-plugin @<seq> both`。已验证：划词工具条、复制（已复制反馈）、添加到对话（单条不重复）、行内胶囊（光标处插入 / 行首插入 / 空行追加 / 无光标落末行 / Backspace·Delete 删掉胶囊且引用同步移除 / 宿主无该节点类型时回退顶部行）、输入框 chip 悬停时 × 替换图标、发送折叠与回显剥离（含 U+FFFC 占位符剥离）、气泡 chip 回显且不再重复引用全文、悬停操作行（普通消息编辑 + 撤回按钮注入宿主行 + 引用气泡插件行、恒定预留高度不跳动）、内联编辑、编辑卡 × 替换图标（宽度不变）、移除引用后发送、保留引用发送、撤回（移除消息 + 定位 seq + `both` 模式还原文件 + 原文回填 + 引用胶囊还原）、无引用插件环境独立运行。
 
