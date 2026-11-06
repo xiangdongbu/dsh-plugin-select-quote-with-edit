@@ -772,6 +772,12 @@ check(
     (clientCode.match(/dsqe_rowOwnActions/gu) ?? []).length >= 4,
 )
 check(
+  'sidebar session rows keep only the "..." menu (hover quick-actions hidden)',
+  clientCode.includes('data-row-key^="session:"') &&
+    clientCode.includes('_rowActions') &&
+    clientCode.includes('sd-rowaction-button'),
+)
+check(
   'wide markdown tables are clamped to the measured column width (px, not %)',
   clientCode.includes('md-table-wide') &&
     clientCode.includes('dsqeTableWidth') &&
