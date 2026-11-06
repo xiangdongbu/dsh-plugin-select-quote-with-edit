@@ -923,6 +923,9 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
   cursor: pointer;
   text-decoration: none;
   text-underline-offset: 2px;
+  /* 颜色/字体一律继承正文：不同主题对 a 的规则不一样，不能让它变成链接色。 */
+  color: inherit;
+  font: inherit;
 }
 .dsqe_filelink:hover,
 .dsqe_filelink:focus-visible {
