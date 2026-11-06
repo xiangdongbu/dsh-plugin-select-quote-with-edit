@@ -887,23 +887,7 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
 /* ---------- 正文里的宽表格（宿主 markdown） ---------- */
 /* 宿主把所有「可能放不下」的表格标成 .md-table-wide，并给了两条：
      .md-table-wide   { overflow-x: hidden; :hover/:focus-visible → scroll }
-     /* ---------- 左侧会话行尾：只留「…」菜单，隐藏快捷按钮 ---------- */
-/* 宿主会话行的行尾容器是 rowActions（CSS module 类名形如 hash_rowActions），
-   里面第一个子节点是「…」菜单按钮（Menu 的 anchor），后面才是挂在
-   sidebar.workspaces.session.row.action 槽位上的悬停快捷按钮（置顶 / 归档 /
-   第三方插件的删除、提醒……）。这些操作在「…」菜单里都已经有了，行内再摆一排
-   图标既挤占标题宽度、又容易误点。
-   选择器全部走稳定钩子：data-row-key="session:<id>"（宿主写在行元素上）与
-   CSS module 的本地名后缀 _rowActions（跨版本不变，只有 hash 前缀会变）。 */
-[data-row-key^="session:"] [class*="_rowActions"] > :not(:first-child) {
-  display: none !important;
-}
-/* 第三方「删除会话」插件自己挂的行内按钮（类名由该插件维护，稳定）。 */
-.sd-rowaction-button {
-  display: none !important;
-}
-
-.md-table-wide table { width: max-content; max-width: max-content }
+     .md-table-wide table { width: max-content; max-width: max-content }
    于是整张表按内容的自然宽度铺出去（真机量过：表格 1130 / 包装层 1512 / 正文
    列只有 748）——最后一列被裁掉、鼠标移上去才变横向滚动条。
    收口由 wide-tables.ts 按实测像素写 inline 样式完成：包装层会跑出父级，百分比
@@ -930,6 +914,38 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
 .md-table-wide :is(th, td) code {
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+/* ---------- 正文里的文件路径（file-links.ts） ---------- */
+/* 命中路径的正文片段/行内 code 带 data-dsqe-filelink：平时不打扰（无下划线），
+   悬停才划线，点击在右侧打开。只做视觉，点击逻辑在 file-links.ts。 */
+.dsqe_filelink {
+  cursor: pointer;
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+.dsqe_filelink:hover,
+.dsqe_filelink:focus-visible {
+  text-decoration: underline;
+}
+.dsqe_filelink:active {
+  opacity: 0.72;
+}
+
+/* ---------- 左侧会话行尾：只留「…」菜单，隐藏快捷按钮 ---------- */
+/* 宿主会话行的行尾容器是 rowActions（CSS module 类名形如 hash_rowActions），
+   里面第一个子节点是「…」菜单按钮（Menu 的 anchor），后面才是挂在
+   sidebar.workspaces.session.row.action 槽位上的悬停快捷按钮（置顶 / 归档 /
+   第三方插件的删除、提醒……）。这些操作在「…」菜单里都已经有了，行内再摆一排
+   图标既挤占标题宽度、又容易误点。
+   选择器全部走稳定钩子：data-row-key="session:<id>"（宿主写在行元素上）与
+   CSS module 的本地名后缀 _rowActions（跨版本不变，只有 hash 前缀会变）。 */
+[data-row-key^="session:"] [class*="_rowActions"] > :not(:first-child) {
+  display: none !important;
+}
+/* 第三方「删除会话」插件自己挂的行内按钮（类名由该插件维护，稳定）。 */
+.sd-rowaction-button {
+  display: none !important;
 }
 `
 

@@ -787,6 +787,14 @@ check(
     /style\.setProperty\(["']width["'],\s*`\$\{width\}px`/u.test(clientCode),
 )
 check(
+  'file links: bundle decorates markdown bodies, styles the hover and wires the click',
+  clientCode.includes('data-dsqe-filelink') &&
+    clientCode.includes('data-dsqe-path') &&
+    clientCode.includes('.dsqe_filelink:hover') &&
+    clientCode.includes('watchFileLinks') &&
+    clientCode.includes('betterSidebar'),
+)
+check(
   'sent quote bubble no longer duplicates the quote body text',
   !clientCode.includes('dsqe-quoteBody'),
 )
@@ -1392,6 +1400,132 @@ check(
     check('withdraw: image restore degrades to no-op without services', count === 0, String(count))
   }
   rmSync(wdir, { recursive: true, force: true })
+}
+
+// ---------------------------------------------------------------- file links
+{
+  const fileLinks = await compileModule('src/client/file-links.ts', join(tmp, 'file-links.cjs'))
+
+  const text =
+    '四、相关文件：运行时入口 `app/utils/offlinePack.ts`，静态资源 staticAssets/plotly/plotly.min.html，参考 README.md 与 package.json:12。'
+  const hits = fileLinks.scanPaths(text)
+  check(
+    'file links: prose paths are detected (dir + bare name + :line suffix)',
+    hits.map((hit) => hit.path).join('|') ===
+      'app/utils/offlinePack.ts|staticAssets/plotly/plotly.min.html|README.md|package.json' &&
+      hits[3].line === 12 &&
+      hits[2].line === undefined,
+    JSON.stringify(hits),
+  )
+  check(
+    'file links: the matched text keeps the :line suffix, the path does not',
+    hits[3].raw === 'package.json:12' && hits[3].path === 'package.json',
+    JSON.stringify(hits[3]),
+  )
+  check(
+    'file links: long extensions win over their prefixes (html not htm, mdx not md)',
+    fileLinks.scanPaths('看 index.mdx 和 page.html').map((hit) => hit.path).join(',') ===
+      'index.mdx,page.html',
+    JSON.stringify(fileLinks.scanPaths('看 index.mdx 和 page.html')),
+  )
+  check(
+    'file links: bare fragment / url / domain / email are not turned into links',
+    fileLinks.scanPaths('https://example.com/a.ts').length === 0 &&
+      fileLinks.scanPaths('见 example.com 与 foo@bar.com').length === 0 &&
+      fileLinks.scanPaths('a/b 与 1/2').length === 0,
+    JSON.stringify([
+      fileLinks.scanPaths('https://example.com/a.ts'),
+      fileLinks.scanPaths('见 example.com 与 foo@bar.com'),
+      fileLinks.scanPaths('a/b 与 1/2'),
+    ]),
+  )
+  check(
+    'file links: a token glued to a trailing word is skipped, ./ and ../ prefixes kept',
+    fileLinks.scanPaths('这是a.tsxX').length === 0 &&
+      fileLinks.scanPaths('./src/a.ts')[0]?.raw === './src/a.ts' &&
+      fileLinks.scanPaths('../lib/a.ts')[0]?.raw === '../lib/a.ts',
+    JSON.stringify([
+      fileLinks.scanPaths('这是a.tsxX'),
+      fileLinks.scanPaths('./src/a.ts'),
+      fileLinks.scanPaths('../lib/a.ts'),
+    ]),
+  )
+
+  check(
+    'file links: relative paths resolve against the session cwd',
+    fileLinks.resolveAgainst('/Users/bu/proj', 'src/x.ts') === '/Users/bu/proj/src/x.ts' &&
+      fileLinks.resolveAgainst('/Users/bu/proj/', './a/../b.ts') === '/Users/bu/proj/b.ts',
+    JSON.stringify([
+      fileLinks.resolveAgainst('/Users/bu/proj', 'src/x.ts'),
+      fileLinks.resolveAgainst('/Users/bu/proj/', './a/../b.ts'),
+    ]),
+  )
+  check(
+    'file links: absolute / ~ / windows drive stay themselves',
+    fileLinks.resolveAgainst('/Users/bu/proj', '/etc/hosts.conf') === '/etc/hosts.conf' &&
+      fileLinks.resolveAgainst('/Users/bu/proj', '~/notes.md') === '~/notes.md' &&
+      fileLinks.resolveAgainst('/Users/bu/proj', 'C:\\app\\x.ts') === 'C:/app/x.ts',
+    JSON.stringify([
+      fileLinks.resolveAgainst('/Users/bu/proj', '/etc/hosts.conf'),
+      fileLinks.resolveAgainst('/Users/bu/proj', '~/notes.md'),
+      fileLinks.resolveAgainst('/Users/bu/proj', 'C:\\app\\x.ts'),
+    ]),
+  )
+  check(
+    'file links: without a cwd a relative path stays relative (host resolves it)',
+    fileLinks.resolveAgainst(undefined, 'src/x.ts') === 'src/x.ts',
+    fileLinks.resolveAgainst(undefined, 'src/x.ts'),
+  )
+
+  {
+    const calls = []
+    const hints = []
+    const opened = fileLinks.openFileLink('app/utils/offlinePack.ts', 12, {
+      sessionId: () => 's1',
+      cwd: () => '/Users/bu/proj',
+      service: () => ({ openFile: (...args) => calls.push(args) }),
+      hint: (message) => hints.push(message),
+    })
+    check(
+      'file links: click hands an absolute path + line to betterSidebar.openFile',
+      opened === true &&
+        calls.length === 1 &&
+        calls[0][0].sessionId === 's1' &&
+        calls[0][0].cwd === '/Users/bu/proj' &&
+        calls[0][1] === '/Users/bu/proj/app/utils/offlinePack.ts' &&
+        calls[0][2] === 'offlinePack.ts' &&
+        calls[0][3]?.line === 12,
+      JSON.stringify(calls),
+    )
+  }
+  {
+    const hints = []
+    const opened = fileLinks.openFileLink('a.ts', undefined, {
+      sessionId: () => 's1',
+      cwd: () => '/p',
+      service: () => null,
+      hint: (message) => hints.push(message),
+    })
+    check(
+      'file links: without dsh-better-sidebar the click only hints',
+      opened === false && hints.length === 1 && hints[0].length > 0,
+      JSON.stringify(hints),
+    )
+  }
+  {
+    const opened = fileLinks.openFileLink('a.ts', undefined, {
+      sessionId: () => null,
+      cwd: () => '/p',
+      service: () => ({ openFile: () => {} }),
+      hint: () => {},
+    })
+    check('file links: no session means no open (never a silent wrong tab)', opened === false)
+  }
+  check(
+    'file links: line is carried only when the reference had one',
+    fileLinks.linkOf({ getAttribute: (name) => ({ 'data-dsqe-path': 'a.ts', 'data-dsqe-line': null })[name] ?? null })
+      ?.line === undefined,
+  )
 }
 
 // ---------------------------------------------------------------- host half

@@ -21,6 +21,12 @@ const SESSION_ID = 's_test'
 const ASSISTANT_SEED =
   '片保留了原名（如 05_花瓣白底大嘴鸭.jpg）；靠文件名匹配是最稳的。\n\n三、两点需要你决定\n\n1. 3 个库存为 0 的颜色也置为上架了——红格子动物派对、麦麦黄油小熊、花雕猫猫乐园。这是按你「新填入的一律改成上架」的规则做的。要改成下架的话说一句，我马上改。\n\n2. 「SKU搜索主图」列对新 SKU 是空的：颜色规格图已经挂好、淘宝会用规格图兜底；如果你希望这一列也逐行填上同一张图，我再补一轮。'
 const ASSISTANT_REPLY = '收到，这就改。'
+/**
+ * File-path paragraph: mirrors what the host's markdown produces (inline `code`
+ * chips + bare paths in prose) so the file-link decorator has something to do.
+ */
+const FILE_SEED =
+  '\n\n四、相关文件：运行时入口 `app/utils/offlinePack.ts`，静态资源 staticAssets/plotly/plotly.min.html，参考 README.md 与 package.json:12。'
 const QUOTED_TEXT =
   '红格子动物派对、麦麦黄油小熊、花雕猫猫乐园。这是按你「新填入的一律改成上架」的规则做的。要改成下架的话说一句，我马上改。'
 const SEEDED_USER_WIRE = [
@@ -257,7 +263,13 @@ const ctx = {
     if (name === 'sessions') return mockSessionsService
     if (name === 'uiConversation') return mockUiConversationService
     if (name === 'conversation') return mockConversationService
+    if (name === 'betterSidebar') return mockBetterSidebarService
     return undefined
+  },
+  /** Optional child scope: the plugin resolves third-party services this way. */
+  inject(names: readonly string[], callback: (child: Record<string, unknown>) => unknown): unknown {
+    void callback({ get: (name: string) => (names.includes(name) ? ctx.get(name) : undefined) })
+    return () => {}
   },
   slots: {
     inject(_name: string, register: () => void): void {
@@ -369,9 +381,33 @@ const mockConversationService = {
   },
 }
 
+/**
+ * Stands in for `dsh-better-sidebar`: `openFile(scope, path, title, options)` is
+ * what the file links call. Records every call on `window.__dsqeOpenFile` so the
+ * mock (and a headless run) can assert what would open where.
+ */
+const mockBetterSidebarService = {
+  openFile(
+    scope: { sessionId: string; cwd?: string },
+    path: string,
+    title?: string,
+    options?: { line?: number },
+  ): void {
+    ;(window as unknown as { __dsqeOpenFile?: unknown }).__dsqeOpenFile = { scope, path, title, options }
+  },
+}
+
 const mockSessionsService = {
   scope(): unknown {
     return { mock: true }
+  },
+  /** The host's session list summary: the file links read `byId[id].cwd`. */
+  list: {
+    getSnapshot: (): unknown => ({
+      activeId: SESSION_ID,
+      byId: { [SESSION_ID]: { cwd: '/Users/bu/mock-project' } },
+    }),
+    subscribe: (): (() => void) => () => {},
   },
   binding(): unknown {
     return {
@@ -396,6 +432,22 @@ const mockSessionsService = {
   },
 }
 
+/**
+ * Minimal markdown parity: `code` spans become real `<code>` elements, the rest
+ * stays text. Enough for the host's two shapes (inline chip + bare path).
+ */
+function renderMarkdown(text: string): React.ReactNode {
+  return text.split(/(`[^`]+`)/g).filter(Boolean).map((part, index) =>
+    part.startsWith('`') && part.endsWith('`') ? (
+      <code key={index} className="ds-code">
+        {part.slice(1, -1)}
+      </code>
+    ) : (
+      <React.Fragment key={index}>{part}</React.Fragment>
+    ),
+  )
+}
+
 function MessageRow({ msg }: { msg: Msg }): React.ReactNode {
   if (msg.role === 'assistant') {
     return (
@@ -405,7 +457,9 @@ function MessageRow({ msg }: { msg: Msg }): React.ReactNode {
         data-chat-anchor-key={msg.key}
         data-chat-flow-kind="assistant"
       >
-        {textOfContent(msg.content)}
+        {/* The host wraps markdown bodies in a CSS-module root; the decorator
+            targets `[class*="markdown"]` inside the row. */}
+        <div className="_markdown_mock_1 ds-markdown">{renderMarkdown(textOfContent(msg.content))}</div>
       </div>
     )
   }
@@ -536,6 +590,7 @@ function App(): React.ReactNode {
   const [failed, setFailed] = useState<string | null>(null)
   const [messages, setMessages] = useState<Msg[]>([
     { key: 'm1', role: 'assistant', content: [{ type: 'text', text: ASSISTANT_SEED }], seq: 1 },
+    { key: 'm-file', role: 'assistant', content: [{ type: 'text', text: FILE_SEED }], seq: 2 },
     {
       key: 'm2',
       role: 'user',

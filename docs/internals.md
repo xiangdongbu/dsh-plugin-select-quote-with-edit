@@ -35,6 +35,8 @@ src/client/withdraw.ts           # 撤回引擎：解析 seq → /rewind-plugin 
 src/client/turn-ghost.ts         # 轮次导航幽灵标记：快照 hidden 行 → 轮次号 → 藏标记
 src/client/title-pin.ts          # 带胶囊的首条消息把会话标题钉成用户自己的那句话
 src/client/echo-strip.ts         # 回显/排队预览的协议块剥离
+src/client/wide-tables.ts        # 正文宽表格按实测像素收口（包装层会跑出父级）
+src/client/file-links.ts         # 正文里的文件路径：悬停下划线 + 点击在右侧打开
 src/client/index.tsx             # 客户端入口
 scripts/build.mjs / verify.mjs / build-mock.mjs / serve-mock.mjs / sync-desktop.mjs
 test/mock/                       # mock dsh 客户端（含 -10 模拟消息插件，?fakequote=1）
@@ -151,6 +153,20 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 - 不 `require` 任何 Harness Client 包（verify 有闸）。
 - **chat.node 注册必须声明 children 链（0.2.2-rc 宿主）**：宿主注册 user/steering 视图时声明 `children: {'conversation.chat.user.before': {kind:'chain', scope:'session'}}`，槽位机制**只给声明了 children 的条目**注入 `renderSlotChain` prop。0.2.2-rc.1 起宿主的用户视图（`UserStyleBubble`）**无条件调用** `renderSlotChain("conversation.chat.user.before", …)`——我们的条目若不声明 children，委派纯文本消息给宿主视图时就会 `TypeError: renderSlotChain is not a function`，宿主把崩溃条目降级，**整个会话所有行**（含引用消息）翻回宿主默认视图：胶囊没了、编辑/撤回按钮没了（0.7.10 时段报障、0.7.12 修复）。升级宿主后复核 children 声明与 `renderSlotChain` 的签名。
 
+**正文里的文件路径（0.7.27）**
+宿主只把显式 markdown 链接交给它的 `openFile`，正文里裸写的路径（`app/utils/offlinePack.ts`、行内 code 里的
+`staticAssets/plotly/plotly.min.html`、带行号的 `package.json:12`）一律是普通文本。`file-links.ts` 在聊天流里补一遍：
+扫 `[data-chat-flow-key] [class*="markdown"]`（宿主 markdown 根的 CSS module 本地名固定含 markdown），命中的
+**行内 code** 只打标记（不包 anchor，避免破坏 code 的盒子），**正文文本节点**里的片段切成三段包成 `<a>`——
+**刻意不给 href**：宿主与其他插件的链接拦截都看 `href`，给了就会被它们接管（`dsh-better-sidebar` 的
+`shouldInterceptLink` 就是这个机制）。点击走 document 捕获阶段的代理，转成绝对路径（相对路径按
+`sessions.list.getSnapshot().byId[id].cwd` 解析）后调用 `ctx.betterSidebar.openFile(scope, path, title, {line})`，
+由它在右侧打开编辑器 tab。
+两个必须守住的点：① **流式输出期间不碰文本节点**——React 还持有它们，拆开会让我们切出来的片段停在旧文字上
+（看起来像消息卡住），所以按「该 markdown 根静默 700ms 才动手」的节奏扫，并跳过 `[data-streaming]` 子树；
+② `betterSidebar` 是**别的插件**提供的服务，必须走 `ctx.inject(['betterSidebar'], …)` 可选子作用域（同
+`uiConversation` 的门控问题），拿不到就只弹提示、不改文字。
+
 ## 排错
 
 | 现象 | 先查 |
@@ -177,4 +193,5 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 | 悬停操作行压住气泡最后一行文字 | `.dsqe_actions` 是 `position: absolute; top: calc(100% - 28px + 4px)`，它假定该行**永久**预留 28px 操作带。宿主原生操作行（`[data-clock]` 容器）挂不上时（插话/steering 气泡、引用气泡、委托失败的行）走的是插件自绘浮层，这类行必须同时打上 `.dsqe_rowOwnActions`（`ensureHostButtons()` 返回 false 即打，成功则摘掉）——`.dsqe_rowQuote` 只管引用气泡。漏打就是「悬停压字」；打了但没摘会让挂载成功的行凭空多出 28px（消息间空档变大） |
 | 想把左侧会话行尾那排悬停按钮去掉 | 宿主会话行结构（dsh-client-ui-workspace 的 Rows）：div[data-row-key=session:<id>] > [span._slot][span._title][span._time][span._rowActions]。rowActions 里**第一个**子节点是「…」菜单按钮（Menu 的 anchor），后面才是挂在 sidebar.workspaces.session.row.action 槽位上的按钮（内置置顶/归档 + 第三方插件的删除、提醒）。所以用 `[data-row-key^="session:"] [class*="_rowActions"] > :not(:first-child){display:none}` 就能只砍快捷按钮、留住菜单；CSS module 类名是 hash_本地名，用后缀选择器跨版本稳定。第三方删除插件的行内按钮另有稳定类名 sd-rowaction-button |
 | 编辑/撤回按钮时有时无，重启也不稳定 | 先跑 `npm run doctor`。九成是**已安装副本被插件管理器按锁文件回滚**了：`~/.dsh/profiles/<profile>/pnpm-lock.yaml` 钉着旧 commit，装/卸任何插件都会重跑 install 把 `node_modules/<包名>` 换回那个版本（`doctor` 会显示「已安装版本 ≠ 仓库版本」或「锁文件提交 ≠ 本地 HEAD」）。修法：把 profile 依赖改成 `github:<owner>/<repo>#<本地HEAD>`（或 `link:` 到工作副本），再 `npm run sync:desktop` |
+| 正文里的文件路径点了没反应 / 不该有下划线的地方有 | 先看 `betterSidebar` 是否拿到（`ctx.inject(['betterSidebar'], …)`；未装 `dsh-better-sidebar` 只会弹提示）；再确认命中的是不是**路径**：`file-links.ts` 只认「已知扩展名 + 两侧边界」，URL / 域名 / `a/b` 会被跳过，流式输出中的消息要等静默 700ms 才会被扫到（`[data-streaming]` 子树直接跳过）。相对路径按会话 cwd 解析，cwd 缺失时原样交给宿主 |
 | 回答正文里的表格比正文列宽、最后一列被裁掉/整体溢出且不能横向滚动 | 宿主的宽表格包装层 `.md-table-wide` 只有 `max-width: 100%`，但它会**跑出父级**——真机实测（视口 1863）：表格 1130 / 包装层 1512 / 父级(正文列) 748，`overflow-x` 已是 `auto` 却 `scrollWidth == clientWidth`，所以既不收缩也不滚动。纯 CSS（`max-width:100%`、`width:100%`、`table-layout`）在这个盒子上都落不住，必须按像素收口：`wide-tables.ts` 取父级（markdown 根）实测宽度，用 inline `!important` 把包装层钉成该宽度 + 表格 100%，并在 DOM 变化/窗口 resize 时用 rAF 合帧重算（记录已应用宽度避免抖动）。对齐也要一起管：宿主正文是 flex 容器，宽表格作为 flex 项会被对齐到右边，宽度钉住后整块往左溢出（右边缘贴正文列、左边跑出视口）——所以同时写 align-self:flex-start / margin:0 / scrollLeft=0；调度用 setTimeout 而不是 rAF（窗口不可见时 rAF 会暂停，收口永不执行），并加 2s 巡检兜住 React 整块替换。经验：**遇到「容器比父级还宽」先量盒模型**（`localStorage` 采样比开 devtools 快），别再靠 CSS 猜 |

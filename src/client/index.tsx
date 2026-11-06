@@ -18,7 +18,14 @@ import { pickDelegate } from './host-node.ts'
 import { runtime } from './runtime.ts'
 import { syncGhostsSoon } from './turn-ghost.ts'
 import { watchComposerResize } from './composer-resize.ts'
-import { recordTableSnapshot, watchWideTables } from './wide-tables.ts'
+import { watchWideTables } from './wide-tables.ts'
+import {
+  currentSessionId,
+  cwdOfSession,
+  showFileHint,
+  watchFileLinks,
+  type BetterSidebarLike,
+} from './file-links.ts'
 import { watchQuotePaste } from './paste.ts'
 import { registerQuoteSource, watchChipDeletion } from './inline-chips.ts'
 import { watchChipClipboard } from './chip-clipboard.ts'
@@ -162,7 +169,7 @@ export function apply(ctx: ClientContext): void {
    * the snapshot's `visibility` + `location.turn`. Resolve the service through
    * an optional child scope, exactly like `dsh-rewind-plugin` does.
    */
-  const injected: { uiConversation?: unknown; conversation?: unknown } = {}
+  const injected: { uiConversation?: unknown; conversation?: unknown; betterSidebar?: unknown } = {}
   ctx.effect(() => {
     const inject = (ctx as unknown as {
       inject?: (names: readonly string[], callback: (child: Record<string, unknown>) => unknown) => unknown
@@ -189,6 +196,33 @@ export function apply(ctx: ClientContext): void {
       if (typeof dispose === 'function') (dispose as () => void)()
     }
   }, 'select-quote-with-edit: uiConversation scope')
+
+  /**
+   * `betterSidebar` (dsh-better-sidebar) is the plugin that owns the right-hand
+   * editor tabs. Same optional-scope trick as above: it is a *plugin* service,
+   * so it is absent in a bare install and a gated property read would never see
+   * it. File links degrade to a hint when it is missing.
+   */
+  ctx.effect(() => {
+    const inject = (ctx as unknown as {
+      inject?: (names: readonly string[], callback: (child: Record<string, unknown>) => unknown) => unknown
+    }).inject
+    if (typeof inject !== 'function') return
+    const dispose = inject(['betterSidebar'], (child) => {
+      try {
+        const get = child.get
+        injected.betterSidebar =
+          (typeof get === 'function' ? (get as (key: string) => unknown).call(child, 'betterSidebar') : undefined) ??
+          child.betterSidebar
+      } catch {
+        injected.betterSidebar = undefined
+      }
+    })
+    return () => {
+      injected.betterSidebar = undefined
+      if (typeof dispose === 'function') (dispose as () => void)()
+    }
+  }, 'select-quote-with-edit: betterSidebar scope')
 
   const withdrawServices = {
     sessions: () => safeGet('sessions'),
@@ -279,7 +313,21 @@ export function apply(ctx: ClientContext): void {
   // (the host wrapper escapes its parent, so CSS percentages cannot do it).
   ctx.effect(() => watchWideTables(), 'select-quote-with-edit: wide tables')
 
-  // TEMP(0.7.23): 宽表格盒模型快照 -> localStorage，确认后删。
-  recordTableSnapshot()
-
+  // Bare file paths in the answer body: hover underline, click opens the file in
+  // the right-hand editor tab (dsh-better-sidebar's openFile). Everything is
+  // resolved at click time; decoration only needs the session cwd for the
+  // tooltip / absolute path.
+  ctx.effect(
+    () =>
+      watchFileLinks({
+        sessionId: () => currentSessionId(safeGet('sessions')),
+        cwd: () => cwdOfSession(safeGet('sessions'), currentSessionId(safeGet('sessions'))),
+        service: () =>
+          (injected.betterSidebar as BetterSidebarLike | undefined) ??
+          (safeGet('betterSidebar') as BetterSidebarLike | undefined) ??
+          null,
+        hint: showFileHint,
+      }),
+    'select-quote-with-edit: file links',
+  )
 }

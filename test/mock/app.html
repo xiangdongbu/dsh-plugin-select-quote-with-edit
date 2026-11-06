@@ -25,6 +25,13 @@
     gap: 10px;
   }
   .ds-assistant { line-height: 24px; margin: 10px 0; user-select: text; }
+  .ds-code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    padding: 1px 5px;
+    border-radius: 5px;
+    background: rgba(127, 127, 127, 0.18);
+  }
   .ds-userRow { display: flex; flex-direction: column; align-items: flex-end; margin: 8px 0; }
   .ds-bubble {
     max-width: 76%;
@@ -100,5 +107,23 @@
   </script>
   <script src="./mock-host.js"></script>
   <script src="../../lib/client.js"></script>
+  <script>
+    /*
+     * Harness hook (mock only): ?autoclick=1 clicks the first decorated file link
+     * after the decorator settles and dumps what the plugin handed to
+     * `betterSidebar.openFile` into the DOM, so a headless `--dump-dom` run can
+     * assert the click path end to end.
+     */
+    if (location.search.indexOf('autoclick=1') !== -1) {
+      setTimeout(function () {
+        var link = document.querySelector('[data-dsqe-filelink]');
+        if (link) link.click();
+        var out = document.createElement('pre');
+        out.id = 'dsqe-click-result';
+        out.textContent = JSON.stringify(window.__dsqeOpenFile || null);
+        document.body.appendChild(out);
+      }, 2600);
+    }
+  </script>
 </body>
 </html>
