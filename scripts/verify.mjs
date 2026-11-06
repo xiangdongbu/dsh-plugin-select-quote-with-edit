@@ -772,6 +772,16 @@ check(
     (clientCode.match(/dsqe_rowOwnActions/gu) ?? []).length >= 4,
 )
 check(
+  'wide markdown tables shrink to the column instead of max-content overflow',
+  clientCode.includes('.md-table-wide') &&
+    clientCode.includes('max-width: 100% !important') &&
+    clientCode.includes('width: auto !important') &&
+    // 说明性注释里也会出现 max-content，去掉注释再判负例
+    !/\.md-table-wide[^{]*\{[^}]*width: max-content/u.test(
+      clientCode.replace(/\/\*[\s\S]*?\*\//gu, ''),
+    ),
+)
+check(
   'sent quote bubble no longer duplicates the quote body text',
   !clientCode.includes('dsqe-quoteBody'),
 )

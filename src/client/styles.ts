@@ -883,6 +883,31 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
   white-space: pre-wrap;
   box-sizing: border-box;
 }
+
+/* ---------- 正文里的宽表格（宿主 markdown） ---------- */
+/* 宿主把所有「可能放不下」的表格标成 .md-table-wide，并给了两条：
+     .md-table-wide            { overflow-x: hidden; :hover/:focus-visible → scroll }
+     .md-table-wide table      { width: max-content; max-width: max-content }
+   于是整张表按内容的自然宽度铺出去，比正文列还宽——最后一列被裁掉、鼠标
+   移上去才变成横向滚动条。这里改成「按正文列宽收缩 + 单元格内换行」：表格
+   仍用 auto 布局（列宽按内容比例分配，不会被拉成等宽），但不再允许超过容器；
+   只有真的有压不下去的长串（无断点的路径/URL）时，才在块内部横向滚动。
+   作用域只有 md-table-wide，不碰宿主其它表格与代码块。 */
+.md-table-wide {
+  overflow-x: auto !important;
+  padding-bottom: 0 !important;
+}
+.md-table-wide table {
+  width: auto !important;
+  max-width: 100% !important;
+}
+.md-table-wide :is(th, td) {
+  min-width: 0 !important;
+  overflow-wrap: anywhere;
+}
+.md-table-wide :is(th, td) code {
+  white-space: normal;
+}
 `
 
 const STYLE_ATTR = 'data-plugin-css'
