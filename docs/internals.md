@@ -2,6 +2,16 @@
 
 合并自 `dsh-plugin-select-quote-simple`（划词引用）与 `dsh-plugin-edit`（消息编辑），一个浏览器模块承载两套功能，共享协议、存储、预览面板与消息节点视图。用户文档见 [README](../README.md)。
 
+## 目录
+
+- [目录结构](#目录结构)
+- [客户端贡献](#客户端贡献)
+- [关键机制](#关键机制)
+- [第三方插件依赖](#第三方插件依赖)
+- [依赖的产品内部约定（升级 dsh 后复核）](#依赖的产品内部约定升级-dsh-后复核)
+- [排错](#排错)
+
+
 ## 目录结构
 
 ```
@@ -56,53 +66,52 @@ test/mock/                       # mock dsh 客户端（含 -10 模拟消息插�
 
 ## 关键机制
 
-**1. 一个节点视图承载三套功能（-20 接管）**
+### 一个节点视图承载三套功能（-20 接管）
 user/steering 选举胜出后，视图只输出 `display: contents` 标记（`data-dsqe-user`）：
 - layout effect 把 `{raw, time, seq}` 注册进 registry（key = 行的 `data-chat-flow-key`；`seq` 取自 `node.data.seq`，供撤回落位），行加 `dsqe_row`（position: relative，悬停 chrome 与编辑器的定位上下文）；
 - 引用消息自绘 chip 气泡（`data-dsqe-quote-bubble`，只渲染「引用 chip + 正文」，不再在下方重复引用全文——top 胶囊已表达引用，悬停 chip 看全文）；普通消息委托宿主 `UserMessageNodeView`（组件名识别，node 原样）；宿主视图缺失时兜底纯文本气泡；
 - 引用行加 `dsqe_rowQuote` 恒定预留操作行高度（`calc(28px + font-delta)`），使悬停操作行显示/隐藏不改变布局（不再上下跳动）；
 - 其他消息插件视图（负优先级）存在时整行委托给它（共存），标记与注册照常。
 
-**2. 划词引用链**（继承自 select-quote-simple，原样保留）
-选区准入（起止都在 `[data-chat-flow-key]` 且不在 composer）→ 工具条浮出 → 「添加到对话」进 store（按会话持久化）→ 输入框**行内胶囊**（插在光标处，见 §13；U+200B 保发送键）→ 发送手势捕获阶段折叠成协议块 → 回显剥离 → 气泡内 chip 回显 → 撤回还原。
+### 划词引用链（继承自 select-quote-simple，原样保留）
+选区准入（起止都在 `[data-chat-flow-key]` 且不在 composer）→ 工具条浮出 → 「添加到对话」进 store（按会话持久化）→ 输入框**行内胶囊**（插在光标处，见下文《输入框行内胶囊》；U+200B 保发送键）→ 发送手势捕获阶段折叠成协议块 → 回显剥离 → 气泡内 chip 回显 → 撤回还原。
 
-**3. 消息编辑链**（继承自 dsh-plugin-edit）
+### 消息编辑链（继承自 dsh-plugin-edit）
 悬停标记行 → 普通消息把「编辑」+「撤回」注入宿主自己的操作行（`MessageIconActions` 的 `data-clock="start"` 根元素，编辑在前、撤回紧接其后，React 重建后由 pointerover/pointermove 重注入）；这两个按钮是**每行各一份的常驻元素**（`ensureHostButtons` 在 node 视图挂载时即注入），放在宿主自己的 `[data-clock]` 容器内，因此**跟随复制按钮的悬停显隐过渡一起出现/淡出**，不由插件单独增删；引用气泡无宿主行，退回插件自绘操作行（时间/复制/编辑/撤回，尺寸与间距对齐宿主 `MessageIconActions`：28px 按钮 / 15px 图标 / 8px gap / 13px 时间，定位在恒定预留区内距气泡 4px）→ 编辑卡（引用 chip + contenteditable 正文 + 提示 + 取消/发送，`fit-content` 右对齐、`max-width: 76%`）→ 发送：`runtime.markFolded()` 置折叠守卫 → `setDraft(composeMessage(正文, 剩余引用))` → 40ms 后触发 composer 主发送按钮。
 
-**3b. 消息撤回链（withdraw.ts）**
+### 消息撤回链（withdraw.ts）
 点 ↶（编辑按钮之后）→ chrome 从行的 `data-chat-flow-key` / `data-chat-anchor-key` 定位消息 → bridge 发布的 `runtime.withdraw` 从宿主 `uiConversation` 的 chat 快照按 anchor key 解析 `seq`（回退到 registry 记录的 `node.data.seq`）→ 调 `sessions.binding(sessionId).session.command('/rewind-plugin @<seq> both')`：追加面遮蔽标记撤回目标及其之后的消息，并以 `both` 模式按检查点还原本轮改过的文件 → **先把** registry 里的**原始 wire 文本**（含 `<dsh-quotes>` 块）经 `inputActions.setDraft` 立即写回输入框（不等待文件还原/命令结算，点击即回填），输入框面板的「撤回还原」把协议块拆回待发引用 chip；命令结果只用于失败提示；随后调用 `session.loadThrough(targetSeq)` 把历史窗口回退到目标消息——否则一次较深的撤回会把已加载窗口留在若干「撤回标记」空行上，聊天区看起来空白、只余「加载更早」。图片：撤回前从 node 视图登记到 registry 的 `image` 内容块（回退到 chat 快照）取出附件 ref；**等回退在客户端视图里生效（目标行从 chat 快照消失）后**再还原，避免与回退引起的会话重绑竞态把新草稿丢掉——后台 `session.readAttachment` 读字节 → `conversation.createDrafts(sessionId, files)`（**0.7.13+：readAttachment 必须传 content 块里的完整附件引用原样对象**（含 width/height/bytes）——宿主升级后 gateway 对引用做存储校验，只挑 attachmentId/mediaType/name 的子集会 `gateway/input-invalid`，图片读不出；registry 里的 ref 带 `full` 字段保存原对象，恢复时 `ref.full ?? ref` 传入。绕过时可用 `restore:read {ok, dataLength}` 调试日志对比 bytes 是否与引用一致），再优先用 composer 自身的 `inputActions.addAttachments(ids)`（回退到 `conversation.input.for(scope).addAttachments`）把图片加回输入框。**协议块后置（0.7.15+）**：`composeMessage` 的 wire 文本改为 `<用户文字>\n\n<协议块（含 header）>`——宿主逐字预览面（轮次导航 tooltip、会话自动标题）读的是消息开头，块在前会让每条引用消息都顶着「# Quoted references: Each item…」。`blockParts` 对标记位置无关（before/after 拼接、stripProtocolHeader 只截 marker 之前），旧格式（块在前）继续解析。chip 走到 submit 的兜底序列化 `serializeQuote` 也改为输出完整协议块（原来是内联 `<quote>` 长文本——排队发送等绕过 fold 的路径会把长文本裸露在消息里）。**轮次导航幽灵标记（0.7.16，按轮次号精确判定）**：撤回后宿主右侧「轮次导航」仍显示被撤回的轮次——`turnOutline` projection 是全日志纯折叠（只认 turn/start 等四种事件），不知道面遮蔽标记；而 rail 的 items = outline ∪ 已加载轮次，`turnNavigationItem` 会用 `isVisibleChatNode`（`visibility === 'visible'`）把整轮遮蔽的项剔掉，于是被撤回的轮次只剩 outline 那一份（`markUnloaded`）。客户端补救：撤回**不删日志**、只追加遮蔽标记，`dsh-rewind-plugin` 在 chat 快照上把被遮蔽的行改成 `visibility: 'hidden'`，而每个 chat 快照节点都带 `location.turn.turn`（与 rail 上的 turn 同源，见 `dsh-client-ui-chat` 的 `nodeTurn`/`chatNode(context, …, { location })`）。所以 `syncGhostTurns` 只需扫快照里 `kind === 'user'` 且 hidden 的行，把轮次号记进 `dsqe-ghost-turns-v2`（幂等、按会话分区），MutationObserver 每次 rAF 合帧时按号把标记按钮 `display:none`（并发漏的用 `data-index` + aria-label「跳转到第 N 轮」定位）。时机：会话绑定（`setGhostSession`）与撤回成功（`runtime.syncGhosts`）后各补扫 5 次（80/250/700/1600/3000ms）——遮蔽标记与快照重建都是异步的。**旧实现（0.7.14/0.7.15）为何废掉**：它悬停每个标记读 `role=tooltip` 的 50 字预览再比对文本，(1) 账本按预览去重，同一句话撤回多次只能藏一个；(2) 合成 `pointermove` 不会让宿主 tooltip 立刻换文本，读到上一条残留 → 张冠李戴，把**没**撤回的轮次藏了；已加载/未加载轮次的预览来源还不同。旧键 `dsqe-ghost-turns`/`-pending`/`-healed` 会被主动删除，旧错账不再生效。**服务获取（0.7.17 的关键坑）**：`uiConversation`/`conversation` **没有**写进本插件的 `inject` 列表（写进去会让整个插件等这些服务就绪才 apply），而 cordis 对未 inject 的服务属性访问是**被门控的**——`ctx.get(name)` 也拿不到时，`chatSnapshotOf` 永远返回 undefined，撤回只能退回 node 视图登记的 `seq`，看起来一切正常。所以幽灵标记必须用 `ctx.inject?.(['uiConversation','conversation'], child => …)` 的可选子作用域取服务（`dsh-rewind-plugin` 同款），拿到后再 `syncGhostsSoon()` 补扫一次。排查抓手：临时 beacon（POST 到 `127.0.0.1:4210`，兼写 `__dsqe_diag__`）打印 `snapshot` 的 keys / 前 12 个节点的 `kind+visibility+location.turn` / 标记按钮的 label+transform，一次就能分清是「拿不到快照」「没看到 hidden 行」还是「按钮没定位到」。**空档重排（0.7.17）**：标记隐藏后宿主仍按原索引定位，rail 上会留洞。`compactMarks` 把第 k 个可见标记放到 `origin + pitch * k`：几何从**没被我们动过**的标记实测（被隐藏的标记永远保留原始 `transform`），两点定直线，一点借缓存；索引不连续（虚拟窗口裁剪）、rail 内部可滚动（>40 轮）时放弃重排，绝不拍脑袋。重排后还要跟两件事：宿主用 `--turn-preview-center` 按虚拟 `start` 定位悬浮卡片（改成重排后的 `y + pitch/2`），以及 `.marks` 容器高度仍是全部轮次的高度（给 `nav` 加 `marginTop = 被省掉高度/2` 把标记重新摆回中线）。**已知局限**：只有落在当前加载窗口里的轮次看得见，窗口外的老轮次保留标记（宁可多一个，不可藏错）。**标题钉住（0.7.14+）**：带胶囊且有自己输入文字的首条消息渲染时（2 分钟内、DOM 首条用户行、seq 未钉过——`dsqe-title-pins` 记账），用自己输入文字的首行调 `session.rename(title)`；宿主标题服务对 `source.kind === "user"` 的会话跳过自动生成（in-flight 生成也被 supersede），标题即用户那句话。回退引擎 `dsh-rewind-plugin` 是本包依赖：安装本插件时一并装好，并由本包的 `cordis.patch.yml` 以 bundle 行挂载（Host 半部注册命令与快照、Client 半部提供撤回后的可见性遮蔽）；其自带 ↶ 按钮由 CSS 隐藏（`.dsh-rewind-btn`），只保留本插件这一个入口。**发布链路会把已安装副本还原（0.7.19 的教训）**：桌面端 profile 的依赖是 `github:xiangdongbu/dsh-plugin-select-quote-with-edit`，`~/.dsh/profiles/<profile>/pnpm-lock.yaml` 里钉的是一个**具体 commit**（`codeload.github.com/.../tar.gz/<sha>`）。插件管理器每次装/卸任何插件都会重跑 `pnpm install`，按锁把 `node_modules/<包名>` **整目录换回那个 commit**——所以 `sync:desktop` 推上去的构建会在一夜之间（或一次「装个别的插件」之后）被静默回滚，表现出来就是「按钮刚才还有，现在又没了，一会儿好一会儿不好」。这不是客户端缓存问题，**重启解决不了**，只能改 profile 依赖指向（`github:<owner>/<repo>#<HEAD>`）或换成 `link:`。`scripts/doctor.mjs`（`npm run doctor`）就是给这件事做的体检：比对仓库构建与已安装副本的字节、抽查版本特征符号（`renderSlotChain`=0.7.12+、`ghostTurnsOf`=0.7.16+、`dsqe_rowOwnActions`=0.7.18+）、并解析锁文件里的 commit 与本地 HEAD 是否一致。
 
-**4. 折叠守卫（markFolded，合并后可修的竞态）**
+### 折叠守卫（markFolded，合并后可修的竞态）
 编辑发送把协议块写回草稿后，composer 面板的「撤回还原」会在 React 提交时读到完整块——若不加守卫会把它反解成待发引用并写 storage，与发送竞态产生残留（后台标签页/慢渲染下必现）。发送前 `runtime.markFolded()` 置 `foldingRef`，撤回还原路径跳过这一次；发送清空草稿后守卫自动复位。
 
-**5. 编辑卡 chip / 输入框 chip：× 替换图标**
+### 编辑卡 chip / 输入框 chip：× 替换图标
 chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-x-shown` 切换 display），悬停只换图标不加节点，胶囊宽度恒定；输入框待发 chip（`chip.tsx` 的 `QuoteChip`）同样采用该模式——× 不再作为胶囊左侧单独的按钮出现，移出即还原图标。悬停同时在上方浮全文预览（body 级 fixed 单例，上翻/下翻 + 140ms 指针桥 + 滚动重排）。点 × 从 `editingQuotes` 移除，发送按剩余重组；全删光且正文为空时发送置灰。
 
-**5b. 编辑卡里的 chip 按原位置内嵌（0.7.3+，chrome.ts）**
+### 编辑卡里的 chip 按原位置内嵌（0.7.3+，chrome.ts）
 编辑卡**只有一个 contentEditable**（`.dsqe_editText`），chip 以 `contenteditable="false"` + `data-quote-id` 的内联 span 直接坐进句子——0.7.2 及以前是「顶部一排 chip + 下面一段正文」，所以编辑按钮打开的卡片永远是「胶囊全在最前」。`fillEditBody()` 按 `quote.at` 切正文、逐段插 chip（无 `at` 的老消息退回旧排版，全放最前）。发送时 `readEditBody()` 走一遍 DOM：文本节点累计字符、遇到 chip 记下 `{id, at}`、`<br>` 记换行、`<div>/<p>` 记块边界（Chrome 回车产生的是 div），**跳过 chip 自己的 label 文本**——直接读 `innerText` 会把胶囊文字算进正文。前导空白不计入 `at`（`composeMessage` 会 trim 掉它，对齐 `spotMapOf` 的口径），尾部空白裁剪不影响已有偏移。最后只把**仍在 DOM 里**的 chip 计入 payload，用户点 × 删掉的那枚不会偷偷跟着发出去。
 
-**6. 时间格式**：当天 `HH:mm`；昨天 `昨天 HH:mm`；今年 `M月D日 HH:mm`；跨年 `YYYY年M月D日 HH:mm`（文案走词典 time.*）。
+### 时间格式
+当天 `HH:mm`；昨天 `昨天 HH:mm`；今年 `M月D日 HH:mm`；跨年 `YYYY年M月D日 HH:mm`（文案走词典 time.*）。
 
-**8. 复制携带引用 + 粘贴还原 / 长文本胶囊（paste.ts）**
+### 回显剥离 / storage 对账 / U+200B
+与两个前身插件一致，剥离幂等（合并后只有一份观察器）。
+
+### 复制携带引用 + 粘贴还原 / 长文本胶囊（paste.ts）
 消息操作行的「复制」写双通道剪贴板（`copyRich`）：`text/plain` = 展示正文；`text/html` = 正文 + 不可见注释 `<!--dsh-quote-data:[{"text":…}]-->`（`<`→`\u003c`、`--`→`\u002d` 转义，防提前闭合）。粘贴到其他应用只看到正文；粘贴进 composer 时 document 捕获阶段的 `paste` 监听器解析标记 → `preventDefault` → 逐条 `addQuote` → `execCommand('insertText')` 在光标处插入正文（失败则 `runtime.draft` 兜底追加）。无标记 / JSON 坏 / 空数组一律不拦截（原生粘贴）。clipboard 写入优先 `navigator.clipboard.write` + `ClipboardItem`（Blob 双通道），降级为选中隐藏富节点 `execCommand('copy')`（HTML 通道保留）。
 
-**9. 超长文本胶囊链（0.3.0+）**
+### 超长文本胶囊链（0.3.0+）
 粘贴进 composer 的纯文本 ≥ `LONG_TEXT_THRESHOLD`（500 字符）且无引用标记时：`preventDefault` + **`stopImmediatePropagation`** → `addQuote(text, { long: true })` 折叠为**长文本胶囊**。事件截断是必须的：宿主 Lexical 编辑器的 paste 处理（`onPasteForRichText`）**不检查 `defaultPrevented`**，事件一旦冒泡到编辑器根元素就会派发 `PASTE_COMMAND` 把剪贴板全文再插一遍（0.3.0 只 `preventDefault` 时胶囊旁边仍出现全文，即此因）；引用数据粘贴分支同理截断，让 `execCommand('insertText')` 成为唯一插入路径。（`chip.tsx` 按 `quote.long` 渲染三行文字线文档图标 `ClipIcon`；`protocol.chipLabel` 把 chip 的 DOM 文本截到 200 字符防大粘贴撑爆布局，全文只存在于 store / 协议块 / 预览面板）。发送时 `composeMessage` 在协议块条目上序列化 `long: true`；`scanQuotes` / `readComposedDraft` / store 持久化都保留该标记——**撤回还原后胶囊原样回到输入框**。气泡内的胶囊由 transcript 传 `onOpen`，点击经 `detail.tsx` 的模块级 store（`openDetail(text, long)`）打开右侧详情。
 
-**10. 原生侧边栏详情（0.4.0+，sidebar-tab.tsx）**
+### 原生侧边栏详情（0.4.0+，sidebar-tab.tsx）
 `openDetail` **优先走宿主原生右侧边栏**（与 `dsh-file-review` 同款接入，**`sidebarRight` / `sidebarRightTabs` 必须声明在插件 `inject` 数组里宿主才会注入**——0.4.0 漏了声明导致永远降级本地抽屉；bundle 内仍 duck typing 松解析，不 import 宿主包）：`sidebarRightTabs.register({ id, kind, title })` 注册标签页 → `slots.inject('sidebar.right.pane.tab')` / `('sidebar.right.pane.tab.title')` 注册正文与标题（`key` = 标签 id）→ 打开用 `sidebarRight.openTabIn(sessionId, tabId, { params: { text, long? } })`，正文组件从 `useTabInfo().tab.navigation.params` 读参数（宿主传入的 hook prop）。`index.tsx` 在 `ctx.effect` 里安装（服务可能晚于 `apply()` 就绪，100ms × 10 次重试），成功后把 opener 挂到 `runtime.detailOpener`；宿主 Minimal profile / mock 无此服务时**降级为本地抽屉**（`shell.overlay` order 110，body portal，× / Esc 关闭）。正文组件 `DetailBody` **照 `dsh-file-review` 的审查面板排版**（0.7.3 重做，用户以截图指认该面板为「native 侧边栏」的标准）：`.dsqe-pane`（100% 高 flex 列）→ `.dsqe-paneHead`（64px，图标块 + `.dsqe-paneTitle` + `{n} 行` / `{n} 字符` 胶囊标签 + 右侧 `.dsqe-paneTools` 圆角工具条：「复制全文」「自动换行」）→ `.dsqe-paneBody`（`--dsqe-pane-canvas` 凹陷画布，滚动）→ `.dsqe-fileCard`（圆角 + 外阴影白卡）→ `.dsqe-fileHead`（44px sticky：折叠箭头 + 图标 + 名称 + 行数/字数）→ `.dsqe-code`（等宽，`.dsqe-codeLine` 逐行 flex，`.dsqe-codeNo` 行号 **`position: sticky; left: 0`** 横向滚动时固定，行 hover 变底）。画布色由 `color-mix(in oklab, var(--dsqe-label) 4%, var(--dsqe-pane-bg))` 算——宿主 `--dsw-alias-bg-layer-1` 与 `-l2` 实测同为 `#fff`，直接拿 layer2 当画布会白成一片（这是「看起来不像原生面板」的直接原因之一）。**滚动容器的顶部内边距必须为 0**（0.7.4 修）：`position: sticky; top: 0` 贴的是 scrollport（padding box）边缘，而 `padding-top` 留在吸顶卡头之上，代码就从那条缝里滚过去 —— 表现为「滑动时顶部漏出一行内容」。所以 `.dsqe-paneBody` 用 `padding: 0 12px 20px`，卡头与标题条之间的 12px 间距交给 `.dsqe-fileCard` 的 `margin-top`（会随内容一起滚走）；`.dsqe-paneHead` 另加不透明底 + `position: relative; z-index: 1` 兜底。`.dsqe-codeNo` 也补了 `z-index: 1`，横向滚动时行号始终压在代码之上。**JSON 自动识别**：`looksLikeJson`（`{`/`[` 开头 + `JSON.parse` 成功且为 object，2MB 上限防卡死）→ 紧凑 JSON 自动 `JSON.stringify(_, null, 2)` 格式化 → 按行分 token（`JSON_TOKEN_RE`：键 / 字符串 / 数字 / 字面量 / 结构符）渲染语法配色（`--dsqe-json-*` 明暗各一组）；JSON 默认不换行（横向滚动 + 行号固定），纯文本默认自动换行。「复制全文」走 `copyText`，成功切 ✓ 1.5s。悬浮预览（React tip 与 chrome 的 DOM 单例 tip）都有 `max-height: 50vh + overflow-y: auto`。旧消息条目无 `long` 字段按普通引用渲染，协议向后兼容。
 
-**7. 回显剥离 / storage 对账 / U+200B**：与两个前身插件一致，剥离幂等（合并后只有一份观察器）。
-
-**12. 点击 chip 定位原文（0.6.0+，locate.ts + source-mark.tsx）**
+### 点击 chip 定位原文（0.6.0+，locate.ts + source-mark.tsx）
 点输入框里的引用 chip → `locateQuote(text, quoteId)`：找容器（`[data-conversation-scroll]` → 最后一条 `[data-chat-flow-key]` 的可滚动祖先 → 全部行的最近公共父级）→ `TreeWalker` 遍历文本节点，跳过 composer 与插件自己的 UI（`[data-composer-card]` / `.dsqe-chip` / `.dsqe-tipWrap` / `.dsqe-drawer` / `.dsqe-sideWrap` / `.dsqe_editor`）→ **拍平**成一个字符串（连续空白压成一个空格；用「最近块级祖先」判断块边界，相邻块之间补一个虚拟空格，替代 DOM 里根本不存在的换行）→ 归一化的引用做 `lastIndexOf`（同一句出现多次取**最后一次**：离输入框最近，几乎总是刚选的那处）→ 命中区间经 `owner/offset` 数组反查回 `(textNode, offset)` 造 `Range`（跨 `<code>` / `<strong>` / 段落都成立）。超长引用按 120/60/30 字符前缀逐级回退（选区跨过被折叠的代码块时仍能落位）。
 
 下划线**不写进消息 DOM**：`Range.getClientRects()` 拿到逐行矩形，`source-mark.tsx` 在 `document.body` 上叠同尺寸的 fixed 指示（淡底 + 2px 虚线底边，虚线是为了读起来像「引用标记」而不是超链接/选区），并按对话滚动容器的矩形裁剪（底部再让出 composer 顶边，避免盖住输入框）。平滑滚动 900ms 内用 rAF 连续重算，之后靠 `scroll`/`resize` 事件跟随；`Range` 脱离文档（消息被撤回、会话切换、行被虚拟化）即自动清除。标记状态是模块级 store（`getSourceMark/subscribeSourceMark`），chip 用 `data-active` 高亮、再点同一枚 chip 关闭（`locateQuote` 返回 `'off'`），`Esc` 或点击别处也关闭；找不到时 `getMissingToken()` 递增，浮出一条 2.6s 提示。粘贴产生的 `long: true` 胶囊没有对话原文，点击仍走右侧详情。
 
-**11. 输入框手动调高（0.5.0+，composer-resize.ts）**
-纯 DOM 装饰（与 hover chrome 同生命周期，`ctx.effect(() => watchComposerResize())`）：MutationObserver 盯 `[data-composer-card]`，出现的卡片加 `dsqe_rzCard`（position:relative）并在顶边中央挂一枚 grip（`dsqe-rzHandle`，absolute top:-5px，76×12 命中区，细横条 `::after` 默认 0.3 透明度、悬停/拖拽 0.75）。`pointerdown` 起拖（Pointer Capture，body 标 `data-dsqe-resizing` 锁选择 + ns-resize 光标）：目标元素 = 卡内 `[data-lexical-editor="true"]` 自身或其最近 `overflow-y: auto/scroll` 祖先（`composerScrollAreaOf`），高度 = 起始高 + (startY − clientY)（输入框贴底，**上拖变高**），写入 inline `height`/`max-height` 并强制 `overflow-y: auto`，钳制在 `COMPOSER_MIN_HEIGHT`(44) ～ `min(COMPOSER_MAX_HEIGHT`(640), 60vh)`；`pointerup` 存 localStorage（`dsh.select-quote-with-edit.composerHeight`），卡片再现时（含刷新后）自动套用；`dblclick` 清 inline 高度 + 清存储复原。与 chip 行的 `--dsqe-pad` 预留互不影响（ResizeObserver 自适应）。
-
-**13. 输入框行内胶囊（0.7.0+，inline-chips.ts）**
+### 输入框行内胶囊（0.7.0+，inline-chips.ts）
 待发引用与粘贴生成的长文本胶囊**直接坐在编辑器正文里**（插在光标处、跟着文字排版流动），不再钉在输入框顶部一行。做法是**复用宿主自己的行内引用节点**，不自己造节点：
 
 - 宿主 composer 是 Lexical 编辑器，`[data-lexical-editor="true"]` 根元素上有 `__lexicalEditor`；它内建的 `reference-chip`（`DecoratorNode`，`isInline() === true`、`isKeyboardSelectable() === false`）就是 `@` 文件/会话引用的那枚胶囊。插件用 `editor._nodes.get('reference-chip').klass` 拿构造器，`new` 一个实例以 `source: 'dsh-quote'` 区分来源，宿主自己的 React 渲染原样拿来用
@@ -118,7 +127,7 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 - **降级到顶部行**：`inlineChipsSupported()`（编辑器在 + 节点类型在）不成立、或插入被编辑器拒绝，面板把 `mode` 切到 `'row'`，退回 0.6.0 的顶部 chip 行（`--dsqe-pad` 预留高度只在 row 模式生效）；切换会话 `resetInlineChips()` 清掉缓存的存在性、`owned` 与失败计数
 - 调试开关：控制台执行 `globalThis.__dsqeDebug = true` 可看到 `[dsqe]` 前缀的 scan / insert / delete 轨迹
 
-**14. 顺序一致（0.7.2+，位置协议 + 回填标记 + 剪贴板 v2）**
+### 顺序一致（0.7.2+，位置协议 + 回填标记 + 剪贴板 v2）
 
 「引用 + 文本1111 + 长文本 + 文本222」这样交错输入，要求**发送后的气泡**和**撤回回填后的输入框**都保持同样的顺序。三条路径各有一套落位机制：
 
@@ -135,25 +144,24 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 - **引用气泡的图片缩略图（0.7.8+）**：带引用/长文本胶囊的消息粘贴图片后发送，气泡上看不到缩略图（无胶囊时宿主自己的视图渲染正常）。图片**其实已随消息到达模型**——丢的只是我们自己 `UserMessageView` 引用分支里的缩略图渲染：宿主传入的 `loadImage(attachment)` 返回的是 **Promise**（blob/object URL 是异步解析的），直接把返回值塞进 `<img src>` 得到字面量 `"[object Promise]"`，加载必然失败。修法是 `AttachmentImage` 组件：同时接受同步字符串与 Promise，resolve 后再渲染 `<img>`；卸载时置 `alive` 防止晚到的 setState。这个 prop 的返回类型契约要写进「依赖的产品内部约定」里复核：`loadImage` 可能同步返回 `string | undefined`，也可能返回 `Promise<string | undefined>`
 - **带图消息 + 胶囊的发送路径本身没问题**：折叠 `inject()` → 宿主 `setDraft`（实测**不清附件**，探针单独验证过）→ 宿主提交，附件块（`content` 里 `type:"image"` 的 block）原样随消息走；变体实验（图前加胶囊 / 长文本胶囊 + 图）模型都收到了 `probe.png`。只有回显渲染这一层丢图
 - **重复胶囊墙（0.7.9+）**：反复粘贴同一段长文本后，几十枚同文本胶囊一次性炸出。链条是三环叠加：① `materializeQuoteMarks` 的标记**单独成文本节点**时（paste-back 的标记就是草稿唯一内容），`splitText(1)` 没有尾段，`swap:head-failed`，chip 没放上——现在有 `head-solo` 分支整节点替换，失败路径也走 `removeMarkBestEffort` 把标记删干净；② 失败曾被**虚报成功**（`placed += 1` 不看 swap 结果），残留标记又让 `hasRestoreMarks()` 永远为真、**面板插入 effect 被冻住**，quote 全成孤儿——现在物化后按树里实际剩余标记数修正 `placed`（`marks:leftover`）；③ `addQuote` 不去重，反复粘贴堆了 44 条同文本 quote，标记一消失 effect 把它们**一次全插出来**——现在同文本同类型直接返回已有 quote。排查利器：`scrollTop` setter 探针之外的又一招——给 `localStorage` 的 store 全键计数 + `[dsqe]` 全量日志对时间线，`swap:head-failed` 与 `chips:0` 同帧出现即锁死
+
+### 输入框手动调高（0.5.0+，composer-resize.ts）
+纯 DOM 装饰（与 hover chrome 同生命周期，`ctx.effect(() => watchComposerResize())`）：MutationObserver 盯 `[data-composer-card]`，出现的卡片加 `dsqe_rzCard`（position:relative）并在顶边中央挂一枚 grip（`dsqe-rzHandle`，absolute top:-5px，76×12 命中区，细横条 `::after` 默认 0.3 透明度、悬停/拖拽 0.75）。`pointerdown` 起拖（Pointer Capture，body 标 `data-dsqe-resizing` 锁选择 + ns-resize 光标）：目标元素 = 卡内 `[data-lexical-editor="true"]` 自身或其最近 `overflow-y: auto/scroll` 祖先（`composerScrollAreaOf`），高度 = 起始高 + (startY − clientY)（输入框贴底，**上拖变高**），写入 inline `height`/`max-height` 并强制 `overflow-y: auto`，钳制在 `COMPOSER_MIN_HEIGHT`(44) ～ `min(COMPOSER_MAX_HEIGHT`(640), 60vh)`；`pointerup` 存 localStorage（`dsh.select-quote-with-edit.composerHeight`），卡片再现时（含刷新后）自动套用；`dblclick` 清 inline 高度 + 清存储复原。与 chip 行的 `--dsqe-pad` 预留互不影响（ResizeObserver 自适应）。
 - **输入框 grip 隐形化（0.7.10→0.7.11）**：调高热区在卡片顶边中央（76×12px，`top: -5px`），**不渲染任何可见把手**——`::after { content: none }`、`background: none`，唯一提示是悬停时 `cursor: ns-resize`；拖拽、双击复原、持久化全部不变。中途一版做过「默认隐藏、悬停浮现」（`opacity` + `pointer-events` 切换），用户后来说干脆不要可见条，改回隐形热区常驻。**关键坑：定位与选择器不能挂我们往卡片上加的类**——宿主 React 重渲染会重置卡片的 `className`，插件加的 `dsqe_rzCard` 随时被抹掉（实测复现）；所以定位（`position: relative`）挂在宿主自己维护的 `[data-composer-card]` 属性上，插件不再往宿主卡片写任何 class
 
-## 依赖的产品内部约定（升级 dsh 后复核）
+### 正文宽表格收口（0.7.21+，wide-tables.ts）
 
-- `[data-composer-card]` + 主发送按钮为卡片内最后一个 `button`（停止按钮渲染 `svg rect`）；
-- 用户消息悬停操作行根元素带 `data-clock="start"`（助手行是 `end`；CSS module 类名会被哈希，属性是稳定钩子）；
-- `[data-lexical-editor="true"]`、`[data-chat-flow-key]`、`[data-conversation-scroll]`、`[data-submission-echo]` / `[data-queue-dock]`；
-- 行内胶囊：根元素上的 `__lexicalEditor`（`update` / `_nodes` / `_nodeMap` / `_selection` / `registerUpdateListener` / `getElementByKey`）、节点类型 `reference-chip`（构造参数 `{source, ref, label, appearance, clipboardText}`、`getSource()` / `getReference()`）、chip 在剪贴板投影里占 U+FFFC、占位符正则 `/[\uE100-\uE11D\uFFFC]/gu`；另外：`_nodes.get('text')` / `_nodes.get('paragraph')` 的 `klass`（可以直接 `new`，但空文本节点会被拒）、root 只接受 block 子节点（`rootNode.splice` 收到文本节点即 #282）；
-- `ctx.get('inputTriggers').registerSource({ trigger, name, codec: { clipboardText, serialize }, openReference })`：未注册 source 的胶囊活到提交会让整条消息 reject；
-- 槽位 `shell.overlay` / `conversation.input.overlay`（props 带 `useInput`、`inputActions.setDraft`）/ `conversation.chat.node`（user/steering）；
-- 聊天节点视图 props：`loadImage(attachment)` 返回 `string | undefined` **或 `Promise<string | undefined>`**（0.7.8 实测是 Promise——同步当字符串用会渲染成 `"[object Promise]"`）；用户消息 `content` 里的图片是 `{type:'image', attachment:{attachmentId, mediaType, name?}}` 块；
-- `ctx.locale.register/bind`；`ctx.slots.inject/register/entries`；
-- `ctx.get('sessions')` / `ctx.get('uiConversation')`（撤回定位 seq 与发命令用）；`sessions.binding(id).session.command(line)`；
-- `dsh-rewind-plugin` 的内部命令 `/rewind-plugin @<seq> both`、其 Client 可见性遮蔽、以及它自带按钮的类名 `dsh-rewind-btn`（用于隐藏，避免重复入口）；
-- 深色：`body[data-ds-dark-theme]`；磨砂走 `--dsw-menu-*`；
-- 不 `require` 任何 Harness Client 包（verify 有闸）。
-- **chat.node 注册必须声明 children 链（0.2.2-rc 宿主）**：宿主注册 user/steering 视图时声明 `children: {'conversation.chat.user.before': {kind:'chain', scope:'session'}}`，槽位机制**只给声明了 children 的条目**注入 `renderSlotChain` prop。0.2.2-rc.1 起宿主的用户视图（`UserStyleBubble`）**无条件调用** `renderSlotChain("conversation.chat.user.before", …)`——我们的条目若不声明 children，委派纯文本消息给宿主视图时就会 `TypeError: renderSlotChain is not a function`，宿主把崩溃条目降级，**整个会话所有行**（含引用消息）翻回宿主默认视图：胶囊没了、编辑/撤回按钮没了（0.7.10 时段报障、0.7.12 修复）。升级宿主后复核 children 声明与 `renderSlotChain` 的签名。
+宿主的宽表格包装层 `._tableScroll_xxx.md-table-wide` 只有 `max-width: 100%`，但它**跑出父级**——0.7.21 真机采样（视口 1863）：表格 1130 / 包装层 1512 / 父级正文列 748。包装层比父级宽一倍，说明它不是普通块级流（是个不收缩的 flex/定位盒），于是 `max-width: 100%` 与 `table { width: 100% }` 都落不到正文列上：表格连容器一起溢出，而容器自己的 `scrollWidth == clientWidth`，**连横向滚动都没有**。
 
-**正文里的文件路径（0.7.27）**
+做法是**只钉包装层**，表格保持宿主的自然宽度：
+
+- 包装层：按实测像素写 `width/max-width/min-width` + `box-sizing: border-box` + 零 padding/margin + `display: block` + `overflow-x: auto` + `overflow-y: hidden`（全部 `!important`）。百分比在这个盒子上不可靠，必须像素。
+- 表格：`width: max-content` / `min-width: 0` / `max-width: none`——列宽按内容分配、单元格沿用宿主的 `max-width: min(30vw,320px)` 上限。用户要的是「原来那张表 + 滚动区域和正文一样宽」，不是把表压进列宽（压进去每列只剩几个字）。
+- 正文列宽度取 `markdown 根 > 父级 > 消息行` 里第一个「不小于 240px 且不宽于视口」的 `getBoundingClientRect().width`，拿不到就这轮不动。
+- **溢出时不做几何对齐**：wrapper 一旦成为滚动容器，`table.getBoundingClientRect().left` 会跟着 `scrollLeft` 变，再用 `margin-left` 去补差会把表格越推越右、和用户滚动打架。只在「放得下」时用 `margin-left` 把表格左缘挪到正文列左缘（不搬 DOM——移动 React 托管的节点会在卸载时炸掉宿主视图）。
+- 调度：`MutationObserver`（新增表格 / 流式追加 / 切会话）+ `resize` + 首帧后 300ms / 1200ms 补算 + **2s 兜底巡检**；刻意用 `setTimeout` 而不是 rAF——窗口不可见/被遮挡时 rAF 会暂停，表格就永远收不了口（切会话时常见）。
+
+### 正文里的文件路径（0.7.27，file-links.ts）
 宿主只把显式 markdown 链接交给它的 `openFile`，正文里裸写的路径（`app/utils/offlinePack.ts`、行内 code 里的
 `staticAssets/plotly/plotly.min.html`、带行号的 `package.json:12`）一律是普通文本。`file-links.ts` 在聊天流里补一遍：
 扫 `[data-chat-flow-key] [class*="markdown"]`（宿主 markdown 根的 CSS module 本地名固定含 markdown），命中的
@@ -172,6 +180,46 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 （看起来像消息卡住），所以按「该 markdown 根静默 700ms 才动手」的节奏扫，并跳过 `[data-streaming]` 子树；
 ② `betterSidebar` 是**别的插件**提供的服务，必须走 `ctx.inject(['betterSidebar'], …)` 可选子作用域（同
 `uiConversation` 的门控问题），拿不到就只弹提示、不改文字。
+
+## 第三方插件依赖
+
+本插件调用另外两个插件的能力，一个必需、一个可选。**只有 `dsh-rewind-plugin` 写进了 `dependencies`**；`dsh-better-sidebar` 刻意不写（见下）。
+
+| 插件 | 关系 | 用到的接口 | 缺失时 |
+|---|---|---|---|
+| `dsh-rewind-plugin` ^0.19.1 | 必需：`dependencies` + `cordis.patch.yml` 第二行 `insert` 挂载 | 内部命令 `/rewind-plugin @<seq> both`；聊天快照的 `visibility: hidden` 遮蔽；自带按钮类名 `dsh-rewind-btn`（用于隐藏） | 撤回点了不生效（正常安装不会缺） |
+| `dsh-better-sidebar` | 可选：运行时探测，**不写任何依赖字段** | `openFile(scope, path, title, {line})`；`hostRouteUrl('sidebar/api/fs.tree')` + `POST {sessionId, cwd, path, exclude}` | 正文路径不加链接（保持纯文本） |
+| `dsh-client-hmr` | 可选：开发期热替换 | `lib/client.js` 变更即重载 | 手动重启 App |
+
+### dsh-rewind-plugin（撤回引擎）
+
+- 挂载在 `cordis.patch.yml` 的第二行，装本包即挂上；它的 Host 半部（文件快照 / 回退命令）只在进程启动时加载，所以**首次安装或升级后要重启一次**。
+- 调用点只有一个：`withdraw.ts` → `sessions.binding(sessionId).session.command('/rewind-plugin @<seq> both')`（`both` = 对话面遮蔽 + 按检查点还原工作区文件）。
+- **唯一的类名耦合**是隐藏它自带的 ↶ 按钮（`.dsh-rewind-btn`，见 `styles.ts`），避免出现两个撤回入口。它若改名，会出现两个 ↶，功能不受影响。
+- `verify` 会检查 `package.json` 的这条依赖与 `cordis.patch.yml` 的挂载行都还在（两者缺一，撤回就成了「按钮在、引擎不在」）。
+
+### dsh-better-sidebar（右侧编辑器）
+
+- **不写进依赖字段的原因**：它是插件服务而不是 npm 包；更要紧的是，写进 `inject` 列表会让**整个插件**等它就绪，没装它的人连划词都用不了。所以走**可选子作用域**：`ctx.inject(['betterSidebar'], child => …)`（`index.tsx`），拿不到就是 `null`——与 `uiConversation` 同一个门控坑。
+- `openFile` 的签名：`openFile({sessionId, cwd}, 绝对路径, basename(路径), {line}?)`，带行号时编辑器直接跳行；title 传 basename，与它自己的 tab 命名一致。
+- `fs.tree` 的用法：`service.hostRouteUrl('sidebar/api/fs.tree')` 拿到 URL（可能是 `URL` 对象，取 `.href`），`POST {sessionId, cwd, path: 目录, exclude: []}`，读 `{ok: true, value: {entries: [{name, isDir}]}}`。只收 `isDir !== true` 的名字，按「会话 + cwd + 目录」缓存 30s（上限 200 条）。返回非 `ok` / 抛错 / 不是数组，一律当作「确认不了」。
+- 链接本身**不带 `href`**：宿主与 better-sidebar 的 `shouldInterceptLink` 都看 `href`，给了就会被它们接管；点击统一走 document 捕获阶段的代理。
+
+## 依赖的产品内部约定（升级 dsh 后复核）
+
+- `[data-composer-card]` + 主发送按钮为卡片内最后一个 `button`（停止按钮渲染 `svg rect`）；
+- 用户消息悬停操作行根元素带 `data-clock="start"`（助手行是 `end`；CSS module 类名会被哈希，属性是稳定钩子）；
+- `[data-lexical-editor="true"]`、`[data-chat-flow-key]`、`[data-conversation-scroll]`、`[data-submission-echo]` / `[data-queue-dock]`；
+- 行内胶囊：根元素上的 `__lexicalEditor`（`update` / `_nodes` / `_nodeMap` / `_selection` / `registerUpdateListener` / `getElementByKey`）、节点类型 `reference-chip`（构造参数 `{source, ref, label, appearance, clipboardText}`、`getSource()` / `getReference()`）、chip 在剪贴板投影里占 U+FFFC、占位符正则 `/[\uE100-\uE11D\uFFFC]/gu`；另外：`_nodes.get('text')` / `_nodes.get('paragraph')` 的 `klass`（可以直接 `new`，但空文本节点会被拒）、root 只接受 block 子节点（`rootNode.splice` 收到文本节点即 #282）；
+- `ctx.get('inputTriggers').registerSource({ trigger, name, codec: { clipboardText, serialize }, openReference })`：未注册 source 的胶囊活到提交会让整条消息 reject；
+- 槽位 `shell.overlay` / `conversation.input.overlay`（props 带 `useInput`、`inputActions.setDraft`）/ `conversation.chat.node`（user/steering）；
+- 聊天节点视图 props：`loadImage(attachment)` 返回 `string | undefined` **或 `Promise<string | undefined>`**（0.7.8 实测是 Promise——同步当字符串用会渲染成 `"[object Promise]"`）；用户消息 `content` 里的图片是 `{type:'image', attachment:{attachmentId, mediaType, name?}}` 块；
+- `ctx.locale.register/bind`；`ctx.slots.inject/register/entries`；
+- `ctx.get('sessions')` / `ctx.get('uiConversation')`（撤回定位 seq 与发命令用）；`sessions.binding(id).session.command(line)`；
+- `dsh-rewind-plugin` 的内部命令 `/rewind-plugin @<seq> both`、其 Client 可见性遮蔽、以及它自带按钮的类名 `dsh-rewind-btn`（用于隐藏，避免重复入口）；
+- 深色：`body[data-ds-dark-theme]`；磨砂走 `--dsw-menu-*`；
+- 不 `require` 任何 Harness Client 包（verify 有闸）。
+- **chat.node 注册必须声明 children 链（0.2.2-rc 宿主）**：宿主注册 user/steering 视图时声明 `children: {'conversation.chat.user.before': {kind:'chain', scope:'session'}}`，槽位机制**只给声明了 children 的条目**注入 `renderSlotChain` prop。0.2.2-rc.1 起宿主的用户视图（`UserStyleBubble`）**无条件调用** `renderSlotChain("conversation.chat.user.before", …)`——我们的条目若不声明 children，委派纯文本消息给宿主视图时就会 `TypeError: renderSlotChain is not a function`，宿主把崩溃条目降级，**整个会话所有行**（含引用消息）翻回宿主默认视图：胶囊没了、编辑/撤回按钮没了（0.7.10 时段报障、0.7.12 修复）。升级宿主后复核 children 声明与 `renderSlotChain` 的签名。
 
 ## 排错
 

@@ -1,25 +1,26 @@
 # dsh-plugin-select-quote-with-edit
 
-[DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/guide/quickstart)（dsh）的客户端插件，把「划词引用」「消息编辑」「消息撤回」合成一个插件：
-
-- **划词引用**：选中对话文字，浮出「复制 / 添加到对话」；引用以**行内胶囊**落在输入框光标处（跟着文字走）并回显在已发送气泡，悬停查看全文，删除键即删
-- **点击定位原文**：点输入框里的引用 chip，自动滚回原文那一行并给它划上下划线（再点一次取消）
-- **超长文本胶囊**：把复制的超长文本（≥500 字符）直接粘贴进输入框，自动折叠为一枚胶囊 chip（文档图标 + 截断文本），落在光标处、不撑爆输入框；发送后消息里同样是胶囊，**点击胶囊在右侧边栏打开详情**滚动查看全文
-- **消息编辑**：悬停自己发送的消息，在气泡下方的悬停操作行里出现「编辑」；内联编辑后作为一条新消息发出
-- **悬停操作行永远压不到字**：宿主原生操作行（`[data-clock]`）挂不上的行（插话/steering 气泡、引用气泡）用插件自绘的浮层行，这些行**永久预留一条操作带的高度**（`.dsqe_rowOwnActions` / `.dsqe_rowQuote`），浮层只会落在气泡下方——悬停不再盖住最后一行文字，也不再让消息跳动
-- **正文里的宽表格：样式不动，滚动区域和正文一样宽**：宿主给宽表格的包装层（`.md-table-wide`）写了 `max-width: 100%`，但它会跑出父级——真机实测：表格 1130 / 包装层 1512 / 正文列 748。插件只把**包装层**按实测像素钉成正文列宽并给它 `overflow-x: auto`，表格本身保持宿主的自然宽度（列宽按内容分配、单元格沿用宿主的 `max-width` 上限），放不下就在这条边界里横向滚——看起来还是原来那张表，只是再也不会撑破版面、也不会被压成每列几个字。换窗口尺寸、切会话、流式追加行都重算，另有 2s 兜底巡检
-- **正文里的文件路径可以点**：回答里出现的项目文件（行内 code 里的 `staticAssets/plotly/plotly.min.html`、正文里裸写的 `app/utils/offlinePack.ts`、甚至带行号的 `package.json:12`）鼠标移上去出现下划线，点一下就在**右侧编辑器**里打开对应文件（走 dsh-better-sidebar 的 `openFile`，带行号时直接跳到那一行）。**只给「当前项目里真实存在」的文件加链接**：解析后的绝对路径必须落在会话 cwd 之下，且该目录的清单里有同名文件（走 dsh-better-sidebar 的 `fs.tree` 路由确认，30s 缓存），确认不了就不加——不会出现点开 404 的编辑器页；URL、域名、`a/b` 这类片段不会被误认成文件；流式输出中的消息不碰（等它静默 700ms 再动手，避免把正在写的文本切坏）
-- **左侧会话行更清爽**：会话行尾只保留「…」菜单（它的菜单里已经有置顶 / 重命名 / 分叉 / 复制 ID / 归档 / 删除），行内那一排悬停快捷按钮（置顶、归档、第三方插件的删除与提醒）不再显示——标题因此多出几十像素宽度。作用域只到 data-row-key="session:…" 的那一行，工作区行不受影响
-- **消息撤回**：编辑按钮后面再加一个「撤回」↶ 图标，一键回退该消息及其之后的内容、还原本轮改过的文件，并把原文（含引用 chip）填回输入框；**消息带的图片附件也会原样回到输入框**（撤回生效后按完整附件引用重新读取字节）
-- **引用消息的预览不再顶着协议头**：协议块改挂消息末尾（旧消息兼容解析），轮次导航悬浮预览、会话自动标题先看到你自己输入的文字；排队发送等路径漏折的胶囊也兜底为协议块而不是裸长文本
-- **撤回后轮次导航不留幽灵（按轮次号精确判定 + 自动重排）**：右侧「轮次导航」概览条是宿主全日志投影（不知道撤回的面遮蔽标记），而聊天快照里每一行都带自己的轮次号 `location.turn.turn`、撤回只把行标成 `visibility: hidden`——所以插件扫一遍快照就能拿到「哪几轮被撤回了」，按号把对应标记按钮隐藏：同一句话撤回多次、切走再切回、React 重渲染后都成立。隐藏后剩下的标记会按顺序重排（第 k 个可见标记回到第 k 格），**不会留下原位的空档**；悬浮预览卡片与 rail 的居中也跟着校正。注意 `uiConversation` 不在 `inject` 列表里，得用可选子作用域去拿（0.7.15 及更早按预览文本匹配，同文多撤会漏、tooltip 未刷新还会藏错轮次；那些错账随旧存储键一并丢弃）
-- **带胶囊的首条消息不再污染会话标题**：自动标题由第一条消息全文生成（协议块+长文本都在），插件用你自己输入的那句话调宿主改名 API 把标题钉住（用户来源的标题会让自动生成跳过）
-- **输入框手动调高**：把鼠标移到输入框卡片顶边中央（光标变为 ↕ 上下箭头），按住上下拖动调整高度（上拖变高，上限 min(60vh, 640px)），双击复原；高度持久化，刷新后保留；**不显示可见的拖拽把手**，只有隐形热区 + 光标提示
-- **输入框滚动不带动正文**：文字长了输入框出现滚动条后，滚轮在输入框里只滚输入框——滚到顶/底也不会像宿主默认那样把对话正文一起滚走；输入框没有溢出时，滚轮仍按宿主默认滚动正文
+[DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/guide/quickstart)（dsh）桌面端 / Web 客户端的**客户端插件**（Node 半只负责挂载，界面全在浏览器模块）：把「划词引用」「消息编辑」「消息撤回」三套交互合成一个包，外加一批正文与侧栏的排版修正。
 
 ![悬停操作行](assets/screenshot-1-hover.png)
 
-## 功能
+## 功能一览
+
+| 能力 | 一句话 | 额外依赖 |
+|---|---|---|
+| 划词引用 | 选中对话文字浮出「复制 / 添加到对话」，引用以行内胶囊落在光标处 | — |
+| 点击定位原文 | 点输入框里的引用胶囊，滚回原文那一行并划上下划线 | — |
+| 超长文本胶囊 | 粘贴 ≥ 500 字符自动折叠成胶囊，点它打开全文 | —（侧边栏缺失时降级为本地抽屉） |
+| 消息编辑 | 悬停气泡下方出现「编辑」，内联改完作为新消息发出 | — |
+| 消息撤回 | ↶ 回退该消息及之后的内容、还原本轮改过的文件、原文回填输入框 | **dsh-rewind-plugin**（包依赖，随插件安装） |
+| 正文文件链接 | 正文里真实存在的项目文件路径可点，在右侧编辑器打开 | dsh-better-sidebar（可选，软依赖） |
+| 正文宽表格 | 表格样式不变，只把横向滚动区域收口到正文列宽 | — |
+| 输入框调高 | 拖输入框顶边调高、双击复原、高度持久化 | — |
+| 侧栏与轮次导航整理 | 会话行只留「…」菜单；撤回的轮次不留幽灵标记 | — |
+
+依赖说明见 [第三方插件依赖](#第三方插件依赖)。
+
+## 功能详解
 
 ### 划词引用
 
@@ -73,13 +74,44 @@
 - **引用胶囊原样保留**：带引用的消息撤回后，协议块回填输入框时会被自动拆回**待发引用 chip**——和撤回前一样显示为引用胶囊，正文也回到编辑器
 - **图片一并恢复**：带图片的消息撤回后，除了文字，消息里的图片也会按附件重新读回并加回输入框（与宿主附件一致的预览），不会只剩文字
 - **深撤回不留白**：撤回后自动把历史窗口回退到目标消息（`session.loadThrough`），避免多次/较早撤回后打开会话只见「加载更早」的空白页
-- **内置回退引擎**：撤回的「对话回退 + 文件还原」由随本插件自动安装并挂载的 [`dsh-rewind-plugin`](https://github.com/SiriLee/dsh-rewind) 提供（内部 `/rewind-plugin @<seq> both` 命令）；其自带的 ↶ 按钮会被隐藏，只保留本插件这一个「撤回」入口
+- **撤回的轮次不留幽灵标记**：右侧「轮次导航」是宿主的全日志投影，不知道撤回的面遮蔽标记。插件扫聊天快照里 `visibility: hidden` 的行、取它们的轮次号，据此隐藏对应标记并**按顺序重排剩下的标记**（第 k 个可见标记回到第 k 格），同一句撤回多次、切走再切回、React 重渲染后都成立；悬浮预览与 rail 居中同步校正
+- **内置回退引擎**：撤回的「对话回退 + 文件还原」由随本插件自动安装并挂载的 [`dsh-rewind-plugin`](https://github.com/SiriLee/dsh-rewind) 提供（内部 `/rewind-plugin @<seq> both` 命令）；其自带的 ↶ 按钮会被隐藏，只保留本插件这一个「撤回」入口。详见 [第三方插件依赖](#第三方插件依赖)
+
+### 正文里的文件链接
+
+回答里出现的项目文件——行内 code 里的 `` `staticAssets/plotly/plotly.min.html` ``、正文里裸写的 `app/utils/offlinePack.ts`、甚至带行号的 `package.json:12`——鼠标移上去出现下划线，点一下就在**右侧编辑器**里打开对应文件（带行号时跳到那一行）。
+
+- **只给「当前项目里真实存在」的文件加链接**：解析后的绝对路径必须落在会话 cwd 之下，且该目录的清单里确实有同名文件（走 dsh-better-sidebar 的 `fs.tree` 路由确认，30s 缓存）；确认不了就不加——不会出现点开 404 的编辑器页
+- **不误伤**：URL、域名、`a/b` 这类没有扩展名的片段不会被当成文件；`x/a.ts`、`a.ts.md` 这种「更长串的一部分」也不算
+- **不碰正在写的消息**：流式输出期间不拆文本节点，等该段 markdown 静默 700ms 再扫，`[data-streaming]` 子树直接跳过；agent 刚写出来的文件会在 8s 内重试补上
+- **拿不到服务就不动手**：没装 dsh-better-sidebar 时正文一个字都不改（见 [第三方插件依赖](#第三方插件依赖)）
+
+### 正文里的宽表格
+
+宿主给宽表格的包装层（`.md-table-wide`）写了 `max-width: 100%`，但它会跑出父级——真机实测：表格 1130 / 包装层 1512 / 正文列 748。结果是表格连容器一起溢出，容器自己的 `scrollWidth == clientWidth`，连横向滚动都没有。
+
+- **只钉包装层**：插件把包装层按实测像素设成正文列宽并给它 `overflow-x: auto`，滚动条正好和正文一样宽
+- **表格样式原样保留**：表格本身保持宿主的自然宽度（`width: max-content`、列宽按内容分配、单元格沿用宿主的 `max-width` 上限），放不下就在这条边界里横向滚——看起来还是原来那张表，不会被压成每列几个字符，也不会撑破版面
+- **会重算**：换窗口尺寸、切会话、流式追加行都重新收口，另有 2s 兜底巡检（窗口不可见时 rAF 会暂停，所以调度用 `setTimeout`）
 
 ### 输入框手动调高
 
-- **顶边 grip 拖拽**：输入框卡片顶边中央有一枚横向 grip（悬停变亮），按住上下拖动即可调整编辑器高度——**向上拖变高**（输入框贴窗口底边），向下拖变矮；拖动时正文自动滚动，不影响已有 chip 与草稿
+- **顶边 grip 拖拽**：输入框卡片顶边中央有一枚隐形横向热区（76×12px，悬停变 ↕ 光标），按住上下拖动即可调整编辑器高度——**向上拖变高**（输入框贴窗口底边），向下拖变矮；拖动时正文自动滚动，不影响已有 chip 与草稿
 - **最大高度限制**：高度钳制在 44px ～ min(60vh, 640px)，小窗口也不会把对话区挤没；高度写入编辑器滚动区的 inline style，不影响宿主默认布局
-- **双击复原 + 持久化**：双击 grip 恢复宿主默认高度并清除记忆；拖出的高度存 localStorage，刷新、切换会话后仍然保留
+- **双击复原 + 持久化**：双击热区恢复宿主默认高度并清除记忆；拖出的高度存 localStorage，刷新、切换会话后仍然保留
+- **不显示可见把手**：只有隐形热区 + 光标提示，卡片上不多一条横线
+
+### 输入框滚动不带动正文
+
+文字长了输入框出现滚动条后，滚轮在输入框里只滚输入框——滚到顶/底也不会像宿主默认那样把对话正文一起滚走；输入框没有溢出时，滚轮仍按宿主默认滚动正文。（宿主是在正文滚动容器上挂 `onWheel` 手动改 `scrollTop` 的，CSS 拦不住，插件在 document 捕获阶段截断事件。）
+
+### 左侧会话行更清爽
+
+会话行尾只保留「…」菜单（它的菜单里已经有置顶 / 重命名 / 分叉 / 复制 ID / 归档 / 删除），行内那一排悬停快捷按钮（置顶、归档、第三方插件的删除与提醒）不再显示——标题因此多出几十像素宽度。作用域只到 `data-row-key="session:…"` 的那一行，工作区行不受影响。
+
+### 带胶囊的首条消息不污染会话标题
+
+自动标题由第一条消息全文生成（协议块 + 长文本都在），插件用你自己输入的那句话调宿主改名 API 把标题钉住（用户来源的标题会让自动生成跳过）。
 
 ## 安装
 
@@ -93,11 +125,11 @@ dsh plugin --profile desktop add git+ssh://git@github.com/xiangdongbu/dsh-plugin
 
 仓库已提交构建产物（`lib/index.js`、`lib/client.js`），克隆即可安装，无需本地构建。装完若界面没立刻出现，重启一次 App；之后改 `lib/client.js` 由 `dsh-client-hmr` 热替换。
 
-> 「撤回」的引擎 `dsh-rewind-plugin` 是本包依赖，安装本插件时会一并安装，并由本包 `cordis.patch.yml` 挂载；升级到含撤回的版本后**需要重启一次**以加载它的 Host 半部（文件快照/回退命令）。
+> 撤回引擎 `dsh-rewind-plugin` 是本包依赖，安装时会一并装上并由 `cordis.patch.yml` 挂载；升级到含撤回的版本后**需要重启一次**以加载它的 Host 半部（文件快照 / 回退命令）。
 
 > 这是 `dsh-plugin-select-quote-simple` 与 `dsh-plugin-edit` 的合并版：**安装本插件后请卸载那两个旧插件**，避免重复的划词工具条与消息接管。
 
-本地开发：
+### 本地开发
 
 ```bash
 git clone git@github.com:xiangdongbu/dsh-plugin-select-quote-with-edit.git
@@ -107,20 +139,58 @@ cp dev.patch.example.yml dev.patch.yml   # 把 <CHECKOUT> 改成本仓库的绝�
 dsh web --patch "$PWD/dev.patch.yml"
 ```
 
-已装进桌面 profile 时，`npm run sync:desktop` 可热更新（`lib/` 推过去触发重载，
-同时把 `package.json` / `locale` / `README` 等包文件一并对齐，免得副本还停在旧版本号）。
+已装进桌面 profile 时，`npm run sync:desktop` 可热更新（`lib/` 推过去触发重载，同时把 `package.json` / `locale` / `README` 等包文件一并对齐，免得副本还停在旧版本号）。
+
+### 装进桌面端之后改代码
+
+**`sync:desktop` 不是永久的**：桌面端 profile 的依赖是 pnpm 从 GitHub 装的（`github:xiangdongbu/dsh-plugin-select-quote-with-edit`），锁文件里钉着一个具体 commit。插件管理器**每次装/卸任何插件都会重跑 install**，把你 `sync:desktop` 推上去的 `node_modules/<包名>` 整目录还原成锁文件里的那个 commit——表现就是「刚刚还好好的，装了别的插件/重启一下，编辑撤回按钮又没了」。
+
+`npm run doctor` 会直接点出这种情况：已安装副本与仓库构建不同字节、或锁文件钉的不是本地 HEAD 时，它会告诉你怎么改 profile 依赖（把 spec 改成 `github:<owner>/<repo>#<本地HEAD>`）。
+
+## 第三方插件依赖
+
+本插件不是自足的：撤回与「右侧打开文件」分别依赖另外两个插件。
+
+| 插件 | 关系 | 用途 | 缺失时 |
+|---|---|---|---|
+| [`dsh-rewind-plugin`](https://github.com/SiriLee/dsh-rewind) `^0.19.1` | **必需**：写在 `dependencies` 里，并由本包 `cordis.patch.yml` 挂载 | 撤回引擎：`/rewind-plugin @<seq> both` = 对话面遮蔽回退 + 按检查点还原工作区文件 | 撤回按钮点了不会生效（安装本插件时一定会装上它） |
+| `dsh-better-sidebar` | **可选**：运行时探测，不写进任何依赖字段 | ① `openFile(scope, path, title, {line})` 在右侧编辑器 tab 打开正文里的文件；② `hostRouteUrl('sidebar/api/fs.tree')` 列目录，用来确认文件**真实存在** | 正文路径不加下划线（保持纯文本），其余功能不受影响 |
+| `dsh-client-hmr` | 可选（开发期） | 改 `lib/client.js` 后热替换，免重启 | 手动重启 App |
+
+### dsh-rewind-plugin（撤回引擎）
+
+- **挂载**：本包 `cordis.patch.yml` 第二行 `insert: dsh-rewind-plugin`，装本插件即挂上，不需要单独操作。
+- **调用**：`sessions.binding(sessionId).session.command('/rewind-plugin @<seq> both')`。
+- **唯一的类名耦合**：它自带那颗 ↶ 按钮被本插件按类名 `dsh-rewind-btn` 隐藏，避免出现两个撤回入口。该插件若改名，会出现两个 ↶，功能不受影响。
+- **升级后要重启**：它的 Host 半部（文件快照 / 回退命令）只在进程启动时加载。
+
+### dsh-better-sidebar（右侧编辑器）
+
+- **故意不写依赖字段**（`dependencies` / `peerDependencies` 都没写）：它是**插件服务**而不是 npm 包，且写进 `inject` 列表会让整个插件等它就绪——没装它的人连划词都用不了。所以走**可选子作用域**：`ctx.inject(['betterSidebar'], child => …)`（`src/client/index.tsx`），拿不到就是 `null`。
+- **用到的两个接口**：
+  - `openFile({sessionId, cwd}, 绝对路径, basename, {line}?)` —— 打开（或复用）右侧编辑器 tab，带行号时跳行；
+  - `hostRouteUrl('sidebar/api/fs.tree')` + `POST {sessionId, cwd, path, exclude: []}` —— 列某个目录，返回 `{ok: true, value: {entries: [{name, isDir}]}}`，用来确认文件存在（30s 缓存）。
+- **没装时**：正文里的路径保持纯文本——不加下划线、不接管点击。`openFileLink` 里另有一层「服务缺失」提示，正常路径走不到。
+
+### 排版参照（不是依赖）
+
+详情面板的排版以 `dsh-file-review` 的审查面板为标准（64px 标题条 + 圆角白卡 + 行号 gutter），接入方式也与它一致（`sidebarRightTabs` + `sidebarRight.openTabIn`）；只在样式与调用形式上对齐，**不 import 它的任何代码**，删掉它也照常工作。
+
+### 需要卸载的旧插件
+
+`dsh-plugin-select-quote-simple` 与 `dsh-plugin-edit`：本插件是二者的合并版，同时装会出现重复的划词工具条与消息接管。
 
 ## 本地验证
 
 ```bash
-npm run check        # typecheck + build + 146 项无头校验
+npm run check        # typecheck + build + 164 项无头校验
 npm run doctor       # 体检：仓库构建 / 已安装副本 / profile 依赖锁定 三者是否一致
 npm run mock         # mock 宿主 + http://127.0.0.1:4173/test/mock/app.html
 ```
 
-**装到客户端之后再改代码，`sync:desktop` 不是永久的**：桌面端 profile 的依赖是 pnpm 从 GitHub 装的（`github:xiangdongbu/dsh-plugin-select-quote-with-edit`），锁文件里钉着一个具体 commit。插件管理器**每次装/卸任何插件都会重跑 install**，把你 `sync:desktop` 推上去的 `node_modules/<包名>` 整目录还原成锁文件里的那个 commit——表现就是「刚刚还好好的，装了别的插件/重启一下，编辑撤回按钮又没了」。`npm run doctor` 会直接点出这种情况：已安装副本与仓库构建不同字节、或锁文件钉的不是本地 HEAD 时，它会告诉你怎么改 profile 依赖（把 spec 改成 `github:<owner>/<repo>#<本地HEAD>`）。
+mock 宿主复刻 dsh web 客户端 DOM 约定（composer 卡片、lexical 编辑器、flow-key 消息行、宿主悬停操作行、发送回显、slot 注册表），并内置 priority -10 的模拟消息插件视图（`?fakequote=1`）验证委托共存；`sessions` / `uiConversation` 服务模拟回退引擎执行 `/rewind-plugin @<seq> both`；`betterSidebar` 与 `fs.tree` 路由也有替身，可验证文件链接的「确认存在才加链接」。
 
-mock 宿主复刻 dsh web 客户端 DOM 约定（composer 卡片、lexical 编辑器、flow-key 消息行、宿主悬停操作行、发送回显、slot 注册表），并内置 priority -10 的模拟消息插件视图（`?fakequote=1`）验证委托共存；`sessions` / `uiConversation` 服务则模拟回退引擎执行 `/rewind-plugin @<seq> both`。已验证：划词工具条、复制（已复制反馈）、添加到对话（单条不重复）、行内胶囊（光标处插入 / 行首插入 / 空行追加 / 无光标落末行 / Backspace·Delete 删掉胶囊且引用同步移除 / 宿主无该节点类型时回退顶部行）、输入框 chip 悬停时 × 替换图标、发送折叠与回显剥离（含 U+FFFC 占位符剥离）、气泡 chip 回显且不再重复引用全文、悬停操作行（普通消息编辑 + 撤回按钮注入宿主行 + 引用气泡插件行、恒定预留高度不跳动）、内联编辑、编辑卡 × 替换图标（宽度不变）、移除引用后发送、保留引用发送、撤回（移除消息 + 定位 seq + `both` 模式还原文件 + 原文回填 + 引用胶囊还原）、无引用插件环境独立运行。
+已覆盖：划词工具条、复制（已复制反馈）、添加到对话（单条不重复）、行内胶囊（光标处插入 / 行首插入 / 空行追加 / 无光标落末行 / Backspace·Delete 删掉胶囊且引用同步移除 / 宿主无该节点类型时回退顶部行）、输入框 chip 悬停时 × 替换图标、发送折叠与回显剥离（含 U+FFFC 占位符剥离）、气泡 chip 回显且不再重复引用全文、悬停操作行（普通消息编辑 + 撤回按钮注入宿主行 + 引用气泡插件行、恒定预留高度不跳动）、内联编辑、编辑卡 × 替换图标（宽度不变）、移除引用后发送、保留引用发送、撤回（移除消息 + 定位 seq + `both` 模式还原文件 + 原文回填 + 引用胶囊还原）、轮次导航标记重排、宽表格收口、文件路径识别与「存在才可点」、无引用插件环境独立运行。
 
 ## 消息协议
 
@@ -135,13 +205,16 @@ Each item in the block below is text the user selected ...
 用户正文
 ```
 
-与 `dsh-plugin-select-quote-simple` / `dsh-plugin-edit` 完全同格：JSON 内 `<` 转义 `\u003c`；展示层只认完整标记对（JSON 坏也剥）；只有完整 + JSON 合法 + 非空数组的块才会还原成待发 chip。`long: true` 标记长文本胶囊（本插件 0.3.0+），`at` 是这枚胶囊在你输入正文里的字符位置（0 = 正文最前面，省略则退回「胶囊都排在最前」的老排版），旧消息无这两个字段照样能读。
+与 `dsh-plugin-select-quote-simple` / `dsh-plugin-edit` 完全同格：JSON 内 `<` 转义 `\u003c`；展示层只认完整标记对（JSON 坏也剥）；只有完整 + JSON 合法 + 非空数组的块才会还原成待发 chip。`long: true` 标记长文本胶囊（0.3.0+），`at` 是这枚胶囊在你输入正文里的字符位置（0 = 正文最前面，省略则退回「胶囊都排在最前」的老排版），旧消息无这两个字段照样能读。
+
+协议块**挂在正文末尾**（不是开头）：宿主的逐字预览面（轮次导航 tooltip、会话自动标题）读的是消息开头，块在前会让每条引用消息都顶着 `# Quoted references:`。
 
 ## 实现要点（详见 [docs/internals.md](docs/internals.md)）
 
-- 一个浏览器模块承载三套功能，`user` / `steering` 消息节点以 `priority: -20` 接管：挂 `display: contents` 标记（供悬停 chrome 定位与原文注册）、引用消息自绘 chip 气泡、普通消息委托宿主视图
+- 一个浏览器模块承载全部功能，`user` / `steering` 消息节点以 `priority: -20` 接管：挂 `display: contents` 标记（供悬停 chrome 定位与原文注册）、引用消息自绘 chip 气泡、普通消息委托宿主视图（必须声明 `children` 链，宿主才会注入 `renderSlotChain`）
 - 划词工具条、输入框（行内胶囊走宿主 Lexical 的 `reference-chip` 节点，顶部 chip 行仅兜底）、悬停操作行、内联编辑器分别挂 `shell.overlay` 与 `conversation.input.overlay`；编辑器经 bridge 拿到宿主 `inputActions`，发送前先置折叠守卫再写草稿，避免撤回还原竞态
 - 消息撤回经 bridge 拿到宿主 `sessions` / `uiConversation`：从 chat 快照按 anchor key 解析消息 `seq`，调用回退引擎的 `/rewind-plugin @<seq> both`（对话回退 + 文件还原），再把原文写回 `inputActions`；协议块由输入框面板自动拆回待发引用 chip
+- 纯 DOM 的三件套（悬停操作行、宽表格收口、文件链接）都是「观察 DOM + 打标记」的正向装饰，不改宿主结构；需要跨插件服务时一律走 `ctx.inject([...])` 可选子作用域（`uiConversation`、`betterSidebar` 都是门控服务）
 - 全部样式一个前缀（`dsqe-`），深浅色跟随产品的 `body[data-ds-dark-theme]`
 
 ## 已知限制
@@ -150,9 +223,11 @@ Each item in the block below is text the user selected ...
 - 插件直接操作 Lexical 编辑器实例（`[data-lexical-editor="true"]` 上的 `__lexicalEditor`）来在光标处插节点，这是宿主当前的实现方式；若宿主改隐藏字段名，同样回退到顶部 chip 行
 - 普通消息的「编辑 / 撤回」注入宿主悬停操作行（`data-clock="start"` 钩子）；宿主若改动该结构，自动回退为插件自绘操作行
 - 带引用的气泡由插件绘制，宿主的悬停动作行不可用，插件自绘「时间 + 复制 + 编辑 + 撤回」；普通消息零改动
-- 「撤回」的对话回退与文件还原由**随插件自动安装并挂载**的 `dsh-rewind-plugin` 提供（内部命令 `/rewind-plugin @<seq> both`）；因此首次安装/升级需要能访问 npm 解析该依赖，装完需重启一次以加载其 Host 半部
+- 「撤回」的对话回退与文件还原由 `dsh-rewind-plugin` 提供；首次安装/升级需要能访问 npm 解析该依赖，装完需重启一次以加载其 Host 半部
 - 隐藏 `dsh-rewind-plugin` 自带 ↶ 按钮依赖其类名 `dsh-rewind-btn`；该插件若改名，两个撤回按钮会同时出现（功能不受影响）
-- 主动斷开旧的两个插件才能避免功能重复
+- 正文文件链接需要 `dsh-better-sidebar` 提供 `openFile` 与 `fs.tree`；它若改了方法名或路由，链接会整体退化为纯文本（不会点出错页面）
+- 宽表格收口依赖宿主包装层类名含 `md-table-wide`、markdown 根类名含 `markdown`
+- 会话行「只留 ⋯ 菜单」依赖宿主行结构 `div[data-row-key=session:*] > [span._rowActions]`，第一子节点是菜单按钮；结构改了这条规则会失配（不会误伤其它行）
 
 ## License
 
