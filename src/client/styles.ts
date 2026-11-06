@@ -897,6 +897,13 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
   overflow-x: auto !important;
   padding-bottom: 0 !important;
 }
+.md-table-wide table {
+  /* 表格比容器宽时，任何左右 auto 边距都会让溢出方向变成「往左顶出去」
+     （右边缘贴住正文列、左边跑到视口外）。宽度由 wide-tables.ts 钉死，
+     这里把边距归零，溢出方向就只剩下容器内的滚动。 */
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
 .md-table-wide :is(th, td) {
   /* 宿主给单元格加了 max-width: min(30vw, 320px)：四列上限相加就超过列宽，
      浏览器只能平均压缩，于是「做法」这种长文本列被压成和「优点」一样窄。

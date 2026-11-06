@@ -49,6 +49,11 @@ function clamp(wrapper: HTMLElement): void {
   ] as const) {
     wrapper.style.setProperty(property, value, 'important')
   }
+  // 宿主正文是 `display: flex` 的容器（XNZzAa_body），宽表格作为 flex 项会被
+  // 交叉轴对齐到右边——宽度钉住后它就整体往左溢出去了。这里显式左对齐。
+  wrapper.style.setProperty('align-self', 'flex-start', 'important')
+  wrapper.style.setProperty('margin-left', '0', 'important')
+  wrapper.style.setProperty('margin-right', 'auto', 'important')
   const table = wrapper.querySelector('table')
   if (table instanceof HTMLElement) {
     // 像素而非 100%：百分比会落到更窄的包含块上，把表格压成 min-content。
@@ -56,6 +61,8 @@ function clamp(wrapper: HTMLElement): void {
     table.style.setProperty('min-width', `${width}px`, 'important')
     table.style.setProperty('max-width', `${width}px`, 'important')
   }
+  // 之前溢出时被滚动过的话，回到左端，否则看起来还是「偏出左边」。
+  if (wrapper.scrollLeft !== 0) wrapper.scrollLeft = 0
 }
 
 /**
@@ -75,8 +82,14 @@ export function watchWideTables(): () => void {
         }
       }
     }
+    // 用 setTimeout 而不是 rAF：窗口不可见/被遮挡时 rAF 会暂停，表格就永远收不
+    // 了口（切会话时常见）。setTimeout 最差也只是被节流到 1s。
     const schedule = (): void => {
-      if (frame === 0) frame = window.requestAnimationFrame(run)
+      if (frame !== 0) return
+      frame = window.setTimeout(() => {
+        frame = 0
+        run()
+      }, 0)
     }
 
     const observer = new MutationObserver((records) => {
@@ -104,11 +117,17 @@ export function watchWideTables(): () => void {
     schedule()
     // 首帧之后再补两次：会话内容常在布局稳定后才算出正文列宽度。
     const timers = [300, 1200].map((delay) => window.setTimeout(schedule, delay))
+    // 兜底巡检：元素被 React 整块替换后不会留下任何线索，只能定期补一次。
+    const sweeper = window.setInterval(run, 2000)
+    const onVisible = (): void => schedule()
+    document.addEventListener('visibilitychange', onVisible)
 
     return () => {
       observer.disconnect()
       window.removeEventListener('resize', onResize)
-      if (frame !== 0) window.cancelAnimationFrame(frame)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.clearInterval(sweeper)
+      if (frame !== 0) window.clearTimeout(frame)
       for (const timer of timers) window.clearTimeout(timer)
     }
   } catch {
@@ -125,34 +144,38 @@ export function recordTableSnapshot(): void {
     const describe = (element: Element | null): string => {
       if (!(element instanceof HTMLElement)) return 'null'
       const rect = element.getBoundingClientRect()
+      const style = getComputedStyle(element)
       const cls = (element.className || '').toString().split(/\s+/u).slice(0, 2).join('.')
-      return `${element.tagName.toLowerCase()}${cls === '' ? '' : `.${cls}`}[w=${Math.round(rect.width)},d=${getComputedStyle(element).display}]`
+      return (
+        `${element.tagName.toLowerCase()}${cls === '' ? '' : `.${cls}`}` +
+        `[x=${Math.round(rect.left)},w=${Math.round(rect.width)},d=${style.display},align=${style.alignItems},as=${style.alignSelf}]`
+      )
     }
     let left = 3
     const tick = (): void => {
       left -= 1
       if (left <= 0) window.clearInterval(timer)
-      const wrapper = document.querySelector<HTMLElement>(WIDE)
-      if (wrapper === null) return
-      const table = wrapper.querySelector('table')
-      const chain: string[] = []
-      let node: Element | null = wrapper
-      for (let i = 0; i < 5 && node !== null; i += 1) {
-        chain.push(describe(node))
-        node = node.parentElement
-      }
-      window.localStorage.setItem(
-        'dsqe-table-metrics',
-        JSON.stringify({
+      const wrappers = Array.from(document.querySelectorAll<HTMLElement>(WIDE)).slice(0, 3)
+      if (wrappers.length === 0) return
+      const tables = wrappers.map((wrapper) => {
+        const table = wrapper.querySelector('table')
+        const chain: string[] = []
+        let node: Element | null = wrapper
+        for (let i = 0; i < 5 && node !== null; i += 1) {
+          chain.push(describe(node))
+          node = node.parentElement
+        }
+        const rect = wrapper.getBoundingClientRect()
+        return {
           applied: wrapper.dataset[APPLIED] ?? null,
+          wrapper: { x: Math.round(rect.left), w: Math.round(rect.width), styleWidth: wrapper.style.width },
+          scrollLeft: wrapper.scrollLeft,
           tableWidth: table === null ? null : Math.round(table.getBoundingClientRect().width),
           tableStyleWidth: table instanceof HTMLElement ? table.style.width : null,
-          wrapperWidth: Math.round(wrapper.getBoundingClientRect().width),
-          wrapperStyleWidth: wrapper.style.width,
           chain,
-          viewport: window.innerWidth,
-        }),
-      )
+        }
+      })
+      window.localStorage.setItem('dsqe-table-metrics', JSON.stringify({ tables, viewport: window.innerWidth }))
     }
     const timer = window.setInterval(tick, 1200)
     tick()
