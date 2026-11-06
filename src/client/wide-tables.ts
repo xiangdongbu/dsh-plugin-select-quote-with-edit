@@ -10,24 +10,29 @@
  * 于是 `max-width: 100%` 与 `table { width: 100% }` 都落不到正文列上：表格连
  * 容器一起溢出、而容器自己的 scrollWidth == clientWidth，连横向滚动都没有。
  *
- * 所以这里按**实测像素**收口：拿最近的正文列（markdown 根 / 消息行）的实际
- * 宽度，把包装层钉成这个宽度，再让表格 100% 铺在里面。宽度变了（换窗口尺寸、
- * 换会话、流式追加行）就重算——用 rAF 合帧 + 记录已应用的宽度，避免抖动。
+ * 所以这里按**实测像素**收口：包装层与表格都钉成正文列的像素宽度（百分比在这
+ * 个盒子上不可靠——`width:100%` 曾经落到一个更窄的包含块上，把表格压成
+ * min-content、每列只剩几个字符宽）。宽度变了（换窗口尺寸、换会话、流式追加行）
+ * 就重算：rAF 合帧 + 首帧后再补算两次（排版常在首帧之后才稳定）。
  */
 const WIDE = '.md-table-wide'
 const APPLIED = 'dsqeTableWidth'
 
-/** 正文列：优先父级（markdown 根），退到消息行。 */
+/** 正文列宽度：markdown 根 > 父级 > 消息行；拿不到可信值返回 0。 */
 function columnWidthOf(wrapper: HTMLElement): number {
-  const anchor =
-    wrapper.parentElement instanceof HTMLElement
-      ? wrapper.parentElement
-      : wrapper.closest<HTMLElement>('[data-chat-flow-key]')
-  if (anchor === null) return 0
-  const width = Math.floor(anchor.getBoundingClientRect().width)
-  // 父级还没排版（0）或明显不是正文列（比视口还宽）时放弃，别把表格钉错。
-  if (width <= 0 || width > window.innerWidth) return 0
-  return width
+  const candidates: (HTMLElement | null)[] = [
+    wrapper.closest<HTMLElement>('[class*="markdown"]'),
+    wrapper.parentElement,
+    wrapper.closest<HTMLElement>('[data-chat-flow-key]'),
+  ]
+  for (const candidate of candidates) {
+    if (candidate === null) continue
+    const width = Math.floor(candidate.getBoundingClientRect().width)
+    // 太窄（还在排版）或比视口还宽（不是正文列）都不采用
+    if (width < 240 || width > window.innerWidth) continue
+    return width
+  }
+  return 0
 }
 
 function clamp(wrapper: HTMLElement): void {
@@ -35,14 +40,21 @@ function clamp(wrapper: HTMLElement): void {
   if (width === 0) return
   if (wrapper.dataset[APPLIED] === String(width)) return
   wrapper.dataset[APPLIED] = String(width)
-  wrapper.style.setProperty('width', `${width}px`, 'important')
-  wrapper.style.setProperty('max-width', `${width}px`, 'important')
-  wrapper.style.setProperty('box-sizing', 'border-box', 'important')
-  wrapper.style.setProperty('overflow-x', 'auto', 'important')
+  for (const [property, value] of [
+    ['width', `${width}px`],
+    ['max-width', `${width}px`],
+    ['min-width', `${width}px`],
+    ['box-sizing', 'border-box'],
+    ['overflow-x', 'auto'],
+  ] as const) {
+    wrapper.style.setProperty(property, value, 'important')
+  }
   const table = wrapper.querySelector('table')
   if (table instanceof HTMLElement) {
-    table.style.setProperty('width', '100%', 'important')
-    table.style.setProperty('max-width', '100%', 'important')
+    // 像素而非 100%：百分比会落到更窄的包含块上，把表格压成 min-content。
+    table.style.setProperty('width', `${width}px`, 'important')
+    table.style.setProperty('min-width', `${width}px`, 'important')
+    table.style.setProperty('max-width', `${width}px`, 'important')
   }
 }
 
@@ -90,13 +102,61 @@ export function watchWideTables(): () => void {
     const onResize = (): void => schedule()
     window.addEventListener('resize', onResize)
     schedule()
+    // 首帧之后再补两次：会话内容常在布局稳定后才算出正文列宽度。
+    const timers = [300, 1200].map((delay) => window.setTimeout(schedule, delay))
 
     return () => {
       observer.disconnect()
       window.removeEventListener('resize', onResize)
       if (frame !== 0) window.cancelAnimationFrame(frame)
+      for (const timer of timers) window.clearTimeout(timer)
     }
   } catch {
     return () => {}
+  }
+}
+
+/**
+ * 临时诊断（0.7.23，确认后删）：把宽表格这条盒模型链写进
+ * localStorage['dsqe-table-metrics']，用于核对「表格到底多宽、链上谁在约束」。
+ */
+export function recordTableSnapshot(): void {
+  try {
+    const describe = (element: Element | null): string => {
+      if (!(element instanceof HTMLElement)) return 'null'
+      const rect = element.getBoundingClientRect()
+      const cls = (element.className || '').toString().split(/\s+/u).slice(0, 2).join('.')
+      return `${element.tagName.toLowerCase()}${cls === '' ? '' : `.${cls}`}[w=${Math.round(rect.width)},d=${getComputedStyle(element).display}]`
+    }
+    let left = 3
+    const tick = (): void => {
+      left -= 1
+      if (left <= 0) window.clearInterval(timer)
+      const wrapper = document.querySelector<HTMLElement>(WIDE)
+      if (wrapper === null) return
+      const table = wrapper.querySelector('table')
+      const chain: string[] = []
+      let node: Element | null = wrapper
+      for (let i = 0; i < 5 && node !== null; i += 1) {
+        chain.push(describe(node))
+        node = node.parentElement
+      }
+      window.localStorage.setItem(
+        'dsqe-table-metrics',
+        JSON.stringify({
+          applied: wrapper.dataset[APPLIED] ?? null,
+          tableWidth: table === null ? null : Math.round(table.getBoundingClientRect().width),
+          tableStyleWidth: table instanceof HTMLElement ? table.style.width : null,
+          wrapperWidth: Math.round(wrapper.getBoundingClientRect().width),
+          wrapperStyleWidth: wrapper.style.width,
+          chain,
+          viewport: window.innerWidth,
+        }),
+      )
+    }
+    const timer = window.setInterval(tick, 1200)
+    tick()
+  } catch {
+    // 诊断用
   }
 }

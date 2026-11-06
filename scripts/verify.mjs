@@ -772,11 +772,13 @@ check(
     (clientCode.match(/dsqe_rowOwnActions/gu) ?? []).length >= 4,
 )
 check(
-  'wide markdown tables are clamped to the measured column width',
+  'wide markdown tables are clamped to the measured column width (px, not %)',
   clientCode.includes('md-table-wide') &&
     clientCode.includes('dsqeTableWidth') &&
     clientCode.includes('watchWideTables') &&
-    /style\.setProperty\(["']width["']/u.test(clientCode),
+    clientCode.includes('min-width') &&
+    // 表格尺寸必须是像素（百分比会落到更窄的包含块上、把列压成 min-content）
+    /style\.setProperty\(["']width["'],\s*`\$\{width\}px`/u.test(clientCode),
 )
 check(
   'sent quote bubble no longer duplicates the quote body text',

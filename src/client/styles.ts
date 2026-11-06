@@ -886,28 +886,27 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
 
 /* ---------- 正文里的宽表格（宿主 markdown） ---------- */
 /* 宿主把所有「可能放不下」的表格标成 .md-table-wide，并给了两条：
-     .md-table-wide            { overflow-x: hidden; :hover/:focus-visible → scroll }
-     .md-table-wide table      { width: max-content; max-width: max-content }
-   于是整张表按内容的自然宽度铺出去，比正文列还宽——最后一列被裁掉、鼠标
-   移上去才变成横向滚动条。这里改成「按正文列宽收缩 + 单元格内换行」：表格
-   仍用 auto 布局（列宽按内容比例分配，不会被拉成等宽），但不再允许超过容器；
-   只有真的有压不下去的长串（无断点的路径/URL）时，才在块内部横向滚动。
-   作用域只有 md-table-wide，不碰宿主其它表格与代码块。 */
+     .md-table-wide   { overflow-x: hidden; :hover/:focus-visible → scroll }
+     .md-table-wide table { width: max-content; max-width: max-content }
+   于是整张表按内容的自然宽度铺出去（真机量过：表格 1130 / 包装层 1512 / 正文
+   列只有 748）——最后一列被裁掉、鼠标移上去才变横向滚动条。
+   收口由 wide-tables.ts 按实测像素写 inline 样式完成：包装层会跑出父级，百分比
+   在这条链上不可靠（max-width:100% 无效；width:100% 又会落到更窄的包含块上，
+   把表格压成 min-content）。这里只保留兜底：容器可滚 + 单元格内断词。 */
 .md-table-wide {
   overflow-x: auto !important;
   padding-bottom: 0 !important;
 }
-.md-table-wide table {
-  width: 100% !important;
-  max-width: 100% !important;
-  table-layout: auto;
-}
 .md-table-wide :is(th, td) {
-  min-width: 0 !important;
+  /* 宿主给单元格加了 max-width: min(30vw, 320px)：四列上限相加就超过列宽，
+     浏览器只能平均压缩，于是「做法」这种长文本列被压成和「优点」一样窄。
+     去掉上限后列宽按内容比例分配（实测 748 列宽：19% / 37% / 22% / 22%）。 */
+  max-width: none !important;
   overflow-wrap: anywhere;
 }
 .md-table-wide :is(th, td) code {
   white-space: normal;
+  overflow-wrap: anywhere;
 }
 `
 

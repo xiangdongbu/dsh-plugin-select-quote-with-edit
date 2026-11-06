@@ -18,7 +18,7 @@ import { pickDelegate } from './host-node.ts'
 import { runtime } from './runtime.ts'
 import { syncGhostsSoon } from './turn-ghost.ts'
 import { watchComposerResize } from './composer-resize.ts'
-import { watchWideTables } from './wide-tables.ts'
+import { recordTableSnapshot, watchWideTables } from './wide-tables.ts'
 import { watchQuotePaste } from './paste.ts'
 import { registerQuoteSource, watchChipDeletion } from './inline-chips.ts'
 import { watchChipClipboard } from './chip-clipboard.ts'
@@ -278,5 +278,8 @@ export function apply(ctx: ClientContext): void {
   // Markdown tables wider than the column: clamp to the measured column width
   // (the host wrapper escapes its parent, so CSS percentages cannot do it).
   ctx.effect(() => watchWideTables(), 'select-quote-with-edit: wide tables')
+
+  // TEMP(0.7.23): 宽表格盒模型快照 -> localStorage，确认后删。
+  recordTableSnapshot()
 
 }
