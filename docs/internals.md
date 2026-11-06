@@ -36,7 +36,7 @@ src/client/turn-ghost.ts         # 轮次导航幽灵标记：快照 hidden 行 
 src/client/title-pin.ts          # 带胶囊的首条消息把会话标题钉成用户自己的那句话
 src/client/echo-strip.ts         # 回显/排队预览的协议块剥离
 src/client/wide-tables.ts        # 正文宽表格按实测像素收口（包装层会跑出父级）
-src/client/file-links.ts         # 正文里的文件路径：悬停下划线 + 点击在右侧打开
+src/client/file-links.ts         # 正文里的文件路径：确认存在才可点，悬停下划线 + 右侧打开
 src/client/index.tsx             # 客户端入口
 scripts/build.mjs / verify.mjs / build-mock.mjs / serve-mock.mjs / sync-desktop.mjs
 test/mock/                       # mock dsh 客户端（含 -10 模拟消息插件，?fakequote=1）
@@ -162,6 +162,12 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 `shouldInterceptLink` 就是这个机制）。点击走 document 捕获阶段的代理，转成绝对路径（相对路径按
 `sessions.list.getSnapshot().byId[id].cwd` 解析）后调用 `ctx.betterSidebar.openFile(scope, path, title, {line})`，
 由它在右侧打开编辑器 tab。
+**只有「当前项目里真实存在」的文件才会变成链接**：先按 `sessions.list…cwd` 解析成绝对路径，要求它落在 cwd 之下
+（`isInsideProject`），再用 better-sidebar 的 `sidebar/api/fs.tree`（`ctx.betterSidebar.hostRouteUrl` + POST
+`{sessionId, cwd, path, exclude}`）列一次所在目录、确认清单里有同名文件；30s 缓存、按目录批量查。任何一步拿不到
+（没装插件、路由报错、目录不存在）都按「没确认」处理 —— 加错链接（点开 404 的编辑器页）比少一个链接糟糕得多。
+文件是 agent 刚写出来的时候，链接会在 8s 内重试补上。
+
 两个必须守住的点：① **流式输出期间不碰文本节点**——React 还持有它们，拆开会让我们切出来的片段停在旧文字上
 （看起来像消息卡住），所以按「该 markdown 根静默 700ms 才动手」的节奏扫，并跳过 `[data-streaming]` 子树；
 ② `betterSidebar` 是**别的插件**提供的服务，必须走 `ctx.inject(['betterSidebar'], …)` 可选子作用域（同
@@ -194,4 +200,4 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 | 想把左侧会话行尾那排悬停按钮去掉 | 宿主会话行结构（dsh-client-ui-workspace 的 Rows）：div[data-row-key=session:<id>] > [span._slot][span._title][span._time][span._rowActions]。rowActions 里**第一个**子节点是「…」菜单按钮（Menu 的 anchor），后面才是挂在 sidebar.workspaces.session.row.action 槽位上的按钮（内置置顶/归档 + 第三方插件的删除、提醒）。所以用 `[data-row-key^="session:"] [class*="_rowActions"] > :not(:first-child){display:none}` 就能只砍快捷按钮、留住菜单；CSS module 类名是 hash_本地名，用后缀选择器跨版本稳定。第三方删除插件的行内按钮另有稳定类名 sd-rowaction-button |
 | 编辑/撤回按钮时有时无，重启也不稳定 | 先跑 `npm run doctor`。九成是**已安装副本被插件管理器按锁文件回滚**了：`~/.dsh/profiles/<profile>/pnpm-lock.yaml` 钉着旧 commit，装/卸任何插件都会重跑 install 把 `node_modules/<包名>` 换回那个版本（`doctor` 会显示「已安装版本 ≠ 仓库版本」或「锁文件提交 ≠ 本地 HEAD」）。修法：把 profile 依赖改成 `github:<owner>/<repo>#<本地HEAD>`（或 `link:` 到工作副本），再 `npm run sync:desktop` |
 | 正文里的文件路径点了没反应 / 不该有下划线的地方有 | 先看 `betterSidebar` 是否拿到（`ctx.inject(['betterSidebar'], …)`；未装 `dsh-better-sidebar` 只会弹提示）；再确认命中的是不是**路径**：`file-links.ts` 只认「已知扩展名 + 两侧边界」，URL / 域名 / `a/b` 会被跳过，流式输出中的消息要等静默 700ms 才会被扫到（`[data-streaming]` 子树直接跳过）。相对路径按会话 cwd 解析，cwd 缺失时原样交给宿主 |
-| 回答正文里的表格比正文列宽、最后一列被裁掉/整体溢出且不能横向滚动 | 宿主的宽表格包装层 `.md-table-wide` 只有 `max-width: 100%`，但它会**跑出父级**——真机实测（视口 1863）：表格 1130 / 包装层 1512 / 父级(正文列) 748，`overflow-x` 已是 `auto` 却 `scrollWidth == clientWidth`，所以既不收缩也不滚动。纯 CSS（`max-width:100%`、`width:100%`、`table-layout`）在这个盒子上都落不住，必须按像素收口：`wide-tables.ts` 取父级（markdown 根）实测宽度，用 inline `!important` 把包装层钉成该宽度 + 表格 100%，并在 DOM 变化/窗口 resize 时用 rAF 合帧重算（记录已应用宽度避免抖动）。对齐也要一起管：宿主正文是 flex 容器，宽表格作为 flex 项会被对齐到右边，宽度钉住后整块往左溢出（右边缘贴正文列、左边跑出视口）——所以同时写 align-self:flex-start / margin:0 / scrollLeft=0；调度用 setTimeout 而不是 rAF（窗口不可见时 rAF 会暂停，收口永不执行），并加 2s 巡检兜住 React 整块替换。经验：**遇到「容器比父级还宽」先量盒模型**（`localStorage` 采样比开 devtools 快），别再靠 CSS 猜 |
+| 回应正文里的表格样式被压坏 / 撑出正文列 | 目标形态是「表格样式原样 + 滚动区域 = 正文列宽」：`wide-tables.ts` **只**把包装层 `.md-table-wide` 钉成实测正文列宽并给 `overflow-x: auto`，表格保持 `width: max-content`（列宽按内容分配、单元格沿用宿主 `max-width: min(30vw,320px)` 上限），所以看起来还是原来那张表，放不下就在边界内横向滚。别再把表格压成正文列宽（那会把每列挤成几个字符），也别去掉单元格上限（自然宽度会飙到 2000px+）。两个坑：① wrapper 一旦成为滚动容器，`table.getBoundingClientRect().left` 会跟着 scrollLeft 变——溢出时**不能**再做 margin-left 几何对齐，否则和用户滚动打架；② 宿主的宽表格包装层会跑出父级（实测 1512 > 748），纯 CSS 百分比收不住，必须写像素 |

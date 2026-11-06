@@ -114,15 +114,50 @@
      * `betterSidebar.openFile` into the DOM, so a headless `--dump-dom` run can
      * assert the click path end to end.
      */
-    if (location.search.indexOf('autoclick=1') !== -1) {
+    var wantsClick = location.search.indexOf('autoclick=1') !== -1;
+    var wantsProbe = location.search.indexOf('probe=1') !== -1;
+    if (wantsClick || wantsProbe) {
       setTimeout(function () {
-        var link = document.querySelector('[data-dsqe-filelink]');
-        if (link) link.click();
-        var out = document.createElement('pre');
-        out.id = 'dsqe-click-result';
-        out.textContent = JSON.stringify(window.__dsqeOpenFile || null);
-        document.body.appendChild(out);
-      }, 2600);
+        if (wantsClick) {
+          var link = document.querySelector('[data-dsqe-filelink]');
+          if (link) link.click();
+          var clicked = document.createElement('pre');
+          clicked.id = 'dsqe-click-result';
+          clicked.textContent = JSON.stringify(window.__dsqeOpenFile || null);
+          document.body.appendChild(clicked);
+        }
+        if (wantsProbe) {
+          var probe = {
+            links: Array.prototype.map.call(
+              document.querySelectorAll('[data-dsqe-filelink]'),
+              function (el) { return el.getAttribute('data-dsqe-path'); }
+            ),
+            plainHomeHtml: !!Array.prototype.slice
+              .call(document.querySelectorAll('[data-chat-flow-key]'))
+              .map(function (row) { return row.textContent || ''; })
+              .join('\n')
+              .match(/不存在的 home\.html/),
+            tables: Array.prototype.map.call(
+              document.querySelectorAll('.md-table-wide'),
+              function (wrapper) {
+                var table = wrapper.querySelector('table');
+                return {
+                  wrapperClient: wrapper.clientWidth,
+                  wrapperScroll: wrapper.scrollWidth,
+                  tableWidth: table ? Math.round(table.getBoundingClientRect().width) : 0,
+                  overflowX: getComputedStyle(wrapper).overflowX,
+                  applied: wrapper.getAttribute('data-dsqe-table-width'),
+                  scrollLeft: wrapper.scrollLeft
+                };
+              }
+            )
+          };
+          var out = document.createElement('pre');
+          out.id = 'dsqe-probe';
+          out.textContent = JSON.stringify(probe);
+          document.body.appendChild(out);
+        }
+      }, 3000);
     }
   </script>
 </body>

@@ -10,10 +10,11 @@
  * 于是 `max-width: 100%` 与 `table { width: 100% }` 都落不到正文列上：表格连
  * 容器一起溢出、而容器自己的 scrollWidth == clientWidth，连横向滚动都没有。
  *
- * 所以这里按**实测像素**收口：包装层与表格都钉成正文列的像素宽度（百分比在这
- * 个盒子上不可靠——`width:100%` 曾经落到一个更窄的包含块上，把表格压成
- * min-content、每列只剩几个字符宽）。宽度变了（换窗口尺寸、换会话、流式追加行）
- * 就重算：rAF 合帧 + 首帧后再补算两次（排版常在首帧之后才稳定）。
+ * 所以这里只把**包装层**按实测像素钉成正文列宽度（百分比在这个盒子上不可靠），
+ * 并给它 `overflow-x: auto`：滚动条正好和正文一样宽。表格本身保持宿主的自然宽度
+ * （`width: max-content`），列宽按内容分配、不挤压换行——放不下就在这条边界里横向
+ * 滚，而不是被压成每列几个字符。宽度变了（换窗口尺寸、换会话、流式追加行）就重算：
+ * setTimeout 合帧 + 首帧后再补算两次（排版常在首帧之后才稳定）。
  */
 const WIDE = '.md-table-wide'
 const APPLIED = 'dsqeTableWidth'
@@ -44,6 +45,7 @@ function clamp(wrapper: HTMLElement): void {
   if (wrapper.dataset[APPLIED] !== String(width)) {
     wrapper.dataset[APPLIED] = String(width)
     for (const [property, value] of [
+      // 只钉**包装层**：它必须正好是正文列的宽度，滚动条也长在这条边界里
       ['width', `${width}px`],
       ['max-width', `${width}px`],
       ['min-width', `${width}px`],
@@ -51,18 +53,31 @@ function clamp(wrapper: HTMLElement): void {
       ['padding', '0'],
       ['margin', '0'],
       ['display', 'block'],
-      ['overflow', 'visible'],
+      ['overflow-x', 'auto'],
+      ['overflow-y', 'hidden'],
     ] as const) {
       wrapper.style.setProperty(property, value, 'important')
     }
-    table.style.setProperty('width', `${width}px`, 'important')
-    table.style.setProperty('min-width', `${width}px`, 'important')
-    table.style.setProperty('max-width', `${width}px`, 'important')
+    // 表格保持宿主的**自然宽度**（列宽按内容分配、不换行挤压），宽就横向滚动：
+    // 用户要的是「原来的表格样子 + 滚动区域和正文一样宽」，不是把表压进列宽。
+    table.style.setProperty('width', 'max-content', 'important')
+    table.style.setProperty('min-width', '0', 'important')
+    table.style.setProperty('max-width', 'none', 'important')
   }
 
-  // 最后一步按几何对齐：不管宿主包装层里夹了什么（内联块、占位、边距），
-  // 直接把表格左边缘挪到包装层（= 正文列）的左边缘。用 margin-left 负值抵消，
-  // 不做 DOM 搬迁——移动 React 托管的节点会在卸载时炸掉宿主视图。
+  // 表格比正文列宽时这条边界里要能横向滚：此时表格左边缘就是内容起点，绝不能
+  // 再用 margin-left 去「对齐」——包装层一滚动，table.left 就跟着偏，算出来的
+  // 偏移会把表格越推越右，和用户的滚动打架。先清掉历史补偿再退出。
+  if (wrapper.scrollWidth > wrapper.clientWidth + 1) {
+    if (table.style.marginLeft !== '' && table.style.marginLeft !== '0px') {
+      table.style.setProperty('margin-left', '0', 'important')
+    }
+    return
+  }
+
+  // 表格放得下时才做几何对齐：不管宿主包装层里夹了什么（内联块、占位、边距），
+  // 把表格左边缘挪到正文列左边缘。用 margin-left 抵消，不做 DOM 搬迁——移动
+  // React 托管的节点会在卸载时炸掉宿主视图。
   const column =
     wrapper.closest<HTMLElement>('[class*="markdown"]') ??
     wrapper.parentElement ??

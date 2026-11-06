@@ -25,8 +25,14 @@ const ASSISTANT_REPLY = '收到，这就改。'
  * File-path paragraph: mirrors what the host's markdown produces (inline `code`
  * chips + bare paths in prose) so the file-link decorator has something to do.
  */
+const TABLE_SEED =
+  '\n\n六、方案对比：\n\n'
+  + '| 方案 | 做法 | 优点 | 代价 |\n'
+  + '| --- | --- | --- | --- |\n'
+  + '| A 运行时自动解压（最省事） | 提交 `staticAssets/offline-packs/11110001.zip`；新增 `app/utils/offlinePack.ts`：require zip → `Asset.downloadAsync()` → 读 base64 → 解压写进 `documentDirectory/cscH5App/11110001` | 别人 clone 后直接 run，零手动步骤，仍是 `file://` 真离线 | 要加一个纯 JS 解压库 fflate（~10KB）；zip 进 git |\n'
 const FILE_SEED =
   '\n\n四、相关文件：运行时入口 `app/utils/offlinePack.ts`，静态资源 staticAssets/plotly/plotly.min.html，参考 README.md 与 package.json:12。'
+  + '\n\n五、不存在的 home.html 与 不在项目里的 /etc/hosts.conf 都不应变成链接。'
 const QUOTED_TEXT =
   '红格子动物派对、麦麦黄油小熊、花雕猫猫乐园。这是按你「新填入的一律改成上架」的规则做的。要改成下架的话说一句，我马上改。'
 const SEEDED_USER_WIRE = [
@@ -386,7 +392,50 @@ const mockConversationService = {
  * what the file links call. Records every call on `window.__dsqeOpenFile` so the
  * mock (and a headless run) can assert what would open where.
  */
+const MOCK_CWD = '/Users/bu/mock-project'
+/** What the fake filesystem lists — only these become clickable links. */
+const MOCK_LISTING: Record<string, string[]> = {
+  [`${MOCK_CWD}/app/utils`]: ['offlinePack.ts'],
+  [`${MOCK_CWD}/staticAssets/plotly`]: ['plotly.min.html'],
+  [MOCK_CWD]: ['README.md', 'package.json'],
+}
+const realFetch = window.fetch.bind(window)
+/** `/sidebar/api/fs.tree` stands in for dsh-better-sidebar's host route. */
+window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const url = String(typeof input === 'string' ? input : (input as Request).url ?? input)
+  if (!url.includes('sidebar/api/fs.tree')) return realFetch(input as RequestInfo, init)
+  const body = JSON.parse(String(init?.body ?? '{}')) as { path?: string }
+  const names = MOCK_LISTING[body.path ?? '']
+  if (names === undefined) {
+    return new Response(JSON.stringify({ ok: false, error: { code: 'fs-not-found' } }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  return new Response(
+    JSON.stringify({
+      ok: true,
+      value: {
+        path: body.path,
+        entries: names.map((name) => ({
+          name,
+          path: `${body.path}/${name}`,
+          isDir: false,
+          hidden: false,
+          isSymlink: false,
+          broken: false,
+        })),
+        truncated: false,
+      },
+    }),
+    { status: 200, headers: { 'content-type': 'application/json' } },
+  )
+}
+
 const mockBetterSidebarService = {
+  /** dsh-better-sidebar builds its routes from this. */
+  hostRouteUrl: (path: string, base?: string): URL =>
+    new URL(path.replace(/^\/+/, ''), base ?? document.baseURI),
   openFile(
     scope: { sessionId: string; cwd?: string },
     path: string,
@@ -405,7 +454,7 @@ const mockSessionsService = {
   list: {
     getSnapshot: (): unknown => ({
       activeId: SESSION_ID,
-      byId: { [SESSION_ID]: { cwd: '/Users/bu/mock-project' } },
+      byId: { [SESSION_ID]: { cwd: MOCK_CWD } },
     }),
     subscribe: (): (() => void) => () => {},
   },
@@ -433,10 +482,12 @@ const mockSessionsService = {
 }
 
 /**
- * Minimal markdown parity: `code` spans become real `<code>` elements, the rest
- * stays text. Enough for the host's two shapes (inline chip + bare path).
+ * Minimal markdown parity: `code` spans become real `<code>` elements, pipe
+ * tables become the host's `.md-table-wide` wrapper + `<table>` (so the wide
+ * table clamp and the file-link decorator both see host-shaped markup), the
+ * rest stays text.
  */
-function renderMarkdown(text: string): React.ReactNode {
+function inlineMarkdown(text: string): React.ReactNode[] {
   return text.split(/(`[^`]+`)/g).filter(Boolean).map((part, index) =>
     part.startsWith('`') && part.endsWith('`') ? (
       <code key={index} className="ds-code">
@@ -446,6 +497,65 @@ function renderMarkdown(text: string): React.ReactNode {
       <React.Fragment key={index}>{part}</React.Fragment>
     ),
   )
+}
+
+function cellsOf(line: string): string[] {
+  return line
+    .replace(/^\s*\|/, '')
+    .replace(/\|\s*$/, '')
+    .split('|')
+    .map((cell) => cell.trim())
+}
+
+function renderMarkdown(text: string): React.ReactNode {
+  const nodes: React.ReactNode[] = []
+  const lines = text.split('\n')
+  let prose: string[] = []
+  const flush = (): void => {
+    if (prose.length === 0) return
+    nodes.push(<React.Fragment key={nodes.length}>{inlineMarkdown(prose.join('\n'))}</React.Fragment>)
+    prose = []
+  }
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/^\s*\|/.test(lines[index])) {
+      prose.push(lines[index])
+      continue
+    }
+    const rows: string[][] = []
+    while (index < lines.length && /^\s*\|/.test(lines[index])) {
+      const cells = cellsOf(lines[index])
+      if (!cells.every((cell) => /^-{2,}$/.test(cell) || cell === '')) rows.push(cells)
+      index += 1
+    }
+    index -= 1
+    if (rows.length === 0) continue
+    flush()
+    const [head, ...body] = rows
+    nodes.push(
+      <div key={nodes.length} className="_tableScroll_mock md-table-wide">
+        <table>
+          <thead>
+            <tr>
+              {head.map((cell, column) => (
+                <th key={column}>{inlineMarkdown(cell)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {body.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                {row.map((cell, column) => (
+                  <td key={column}>{inlineMarkdown(cell)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>,
+    )
+  }
+  flush()
+  return nodes
 }
 
 function MessageRow({ msg }: { msg: Msg }): React.ReactNode {
@@ -591,6 +701,7 @@ function App(): React.ReactNode {
   const [messages, setMessages] = useState<Msg[]>([
     { key: 'm1', role: 'assistant', content: [{ type: 'text', text: ASSISTANT_SEED }], seq: 1 },
     { key: 'm-file', role: 'assistant', content: [{ type: 'text', text: FILE_SEED }], seq: 2 },
+    { key: 'm-table', role: 'assistant', content: [{ type: 'text', text: TABLE_SEED }], seq: 3 },
     {
       key: 'm2',
       role: 'user',

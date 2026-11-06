@@ -905,10 +905,9 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
   margin-right: 0 !important;
 }
 .md-table-wide :is(th, td) {
-  /* 宿主给单元格加了 max-width: min(30vw, 320px)：四列上限相加就超过列宽，
-     浏览器只能平均压缩，于是「做法」这种长文本列被压成和「优点」一样窄。
-     去掉上限后列宽按内容比例分配（实测 748 列宽：19% / 37% / 22% / 22%）。 */
-  max-width: none !important;
+  /* 单元格上限保持宿主原样（max-width: min(30vw, 320px)）：表格回到「自己的
+     自然宽度、列宽按内容分配、超宽就横向滚」，而不是被压进正文列宽。这里只补
+     一条断词规则——没有断点的长路径/长 URL 也能在单元格里折行，不会把表撑爆。 */
   overflow-wrap: anywhere;
 }
 .md-table-wide :is(th, td) code {

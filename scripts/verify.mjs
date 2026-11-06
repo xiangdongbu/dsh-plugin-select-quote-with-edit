@@ -778,13 +778,16 @@ check(
     clientCode.includes('sd-rowaction-button'),
 )
 check(
-  'wide markdown tables are clamped to the measured column width (px, not %)',
+  'wide tables: the WRAPPER is pinned to the column in px and scrolls; the table keeps max-content',
   clientCode.includes('md-table-wide') &&
     clientCode.includes('dsqeTableWidth') &&
     clientCode.includes('watchWideTables') &&
-    clientCode.includes('min-width') &&
-    // 表格尺寸必须是像素（百分比会落到更窄的包含块上、把列压成 min-content）
-    /style\.setProperty\(["']width["'],\s*`\$\{width\}px`/u.test(clientCode),
+    // 包装层按实测像素钉成正文列宽（百分比在这条链上不可靠）+ 自身横向滚动
+    clientCode.includes('${width}px') &&
+    clientCode.includes('overflow-x') &&
+    clientCode.includes('overflow-y') &&
+    // 表格本身保持自然宽度：列宽按内容分配，放不下就横向滚，而不是压进列宽
+    /style\.setProperty\(["']width["'],\s*["']max-content["']/u.test(clientCode),
 )
 check(
   'file links: bundle decorates markdown bodies, styles the hover and wires the click',
@@ -1520,6 +1523,68 @@ check(
       hint: () => {},
     })
     check('file links: no session means no open (never a silent wrong tab)', opened === false)
+  }
+  check(
+    'file links: only paths inside the session project can become links',
+    fileLinks.isInsideProject('/p', '/p/a/b.ts') === true &&
+      fileLinks.isInsideProject('/p', '/p') === true &&
+      fileLinks.isInsideProject('/p', '/p2/a.ts') === false &&
+      fileLinks.isInsideProject('/p', '/etc/hosts.conf') === false &&
+      fileLinks.isInsideProject(undefined, '/p/a.ts') === false,
+    JSON.stringify([
+      fileLinks.isInsideProject('/p', '/p/a/b.ts'),
+      fileLinks.isInsideProject('/p', '/p2/a.ts'),
+    ]),
+  )
+  {
+    const realFetch = globalThis.fetch
+    const listings = {
+      '/p/src': [
+        { name: 'exists.ts', isDir: false },
+        { name: 'sub', isDir: true },
+      ],
+    }
+    let calls = 0
+    globalThis.fetch = async (_url, init) => {
+      calls += 1
+      const body = JSON.parse(String(init?.body ?? '{}'))
+      const entries = listings[body.path]
+      if (entries === undefined) {
+        return new Response(JSON.stringify({ ok: false, error: { code: 'fs-not-found' } }), {
+          status: 200,
+        })
+      }
+      return new Response(
+        JSON.stringify({ ok: true, value: { path: body.path, entries, truncated: false } }),
+        { status: 200 },
+      )
+    }
+    const deps = {
+      sessionId: () => 's1',
+      cwd: () => '/p',
+      service: () => ({ hostRouteUrl: (path) => new URL(`http://localhost/${path}`) }),
+      hint: () => {},
+    }
+    const allowed = await fileLinks.existingInProject(
+      ['/p/src/exists.ts', '/p/src/missing.ts', '/p/src/sub', '/etc/hosts.conf'],
+      deps,
+    )
+    check(
+      'file links: existence gate keeps only real files inside the project',
+      allowed.size === 1 && allowed.has('/p/src/exists.ts') && calls === 1,
+      JSON.stringify({ allowed: [...allowed], calls }),
+    )
+    const noRoute = await fileLinks.existingInProject(['/q/src/exists.ts'], {
+      ...deps,
+      cwd: () => '/q',
+      service: () => ({}),
+    })
+    check(
+      'file links: without the fs route nothing is linked (conservative)',
+      noRoute.size === 0,
+      JSON.stringify([...noRoute]),
+    )
+    globalThis.fetch = realFetch
   }
   check(
     'file links: line is carried only when the reference had one',

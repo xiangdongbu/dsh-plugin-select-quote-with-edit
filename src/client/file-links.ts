@@ -159,6 +159,8 @@ export interface BetterSidebarLike {
     title?: string,
     options?: { line?: number; lineEnd?: number },
   ) => void
+  /** 它的 HTTP 路由基址（`sidebar/api/<method>`）；用来确认文件真的存在。 */
+  hostRouteUrl?: (path: string, baseUrl?: string) => unknown
 }
 
 export interface FileLinkDeps {
@@ -239,13 +241,118 @@ function createAnchor(hit: FileHit, cwd: string | undefined): HTMLAnchorElement 
   return anchor
 }
 
+/** 目录清单缓存：同一次 sweep 里一个目录只查一次，30s 内复用。 */
+const DIR_TTL_MS = 30_000
+/** 没确认成功（文件还不存在）时的重试间隔：agent 刚写完文件就要能点上。 */
+const RETRY_MS = 8_000
+const dirCache = new Map<string, { at: number; names: Set<string> | null }>()
+
+/** 该绝对路径是否在会话工作目录（= 当前项目）里。 */
+export function isInsideProject(cwd: string | undefined, absolute: string): boolean {
+  if (cwd === undefined || cwd.trim() === '') return false
+  const root = cwd.trim().replace(/\\/g, '/').replace(/\/+$/u, '')
+  const target = absolute.replace(/\\/g, '/')
+  return target === root || target.startsWith(`${root}/`)
+}
+
 /**
- * 把一个文本节点里命中的路径包成 anchor（前缀/中间/后缀各一段文本）。
+ * 列一个目录里**文件**的名字。返回 null = 查不到（服务缺失 / 路由失败 / 目录
+ * 不存在）——调用方把 null 当作「不能确认」，宁可不加链接。
+ */
+async function namesInDir(
+  deps: FileLinkDeps,
+  dir: string,
+  sessionId: string,
+  cwd: string | undefined,
+): Promise<Set<string> | null> {
+  const key = `${sessionId}\u0000${cwd ?? ''}\u0000${dir}`
+  const cached = dirCache.get(key)
+  if (cached !== undefined && Date.now() - cached.at < DIR_TTL_MS) return cached.names
+  const remember = (names: Set<string> | null): Set<string> | null => {
+    if (dirCache.size > 200) dirCache.clear()
+    dirCache.set(key, { at: Date.now(), names })
+    return names
+  }
+  const service = deps.service()
+  const route = service?.hostRouteUrl
+  if (typeof route !== 'function') return remember(null)
+  try {
+    const url = route.call(service, 'sidebar/api/fs.tree')
+    const href = typeof url === 'string' ? url : String((url as { href?: unknown } | null)?.href ?? '')
+    if (href === '') return remember(null)
+    const response = await fetch(href, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionId,
+        ...(cwd === undefined ? {} : { cwd }),
+        path: dir,
+        exclude: [],
+      }),
+    })
+    const payload = (await response.json().catch(() => null)) as
+      | { ok?: unknown; value?: { entries?: unknown } }
+      | null
+    const entries = payload?.ok === true ? payload.value?.entries : null
+    if (!Array.isArray(entries)) return remember(null)
+    const names = new Set<string>()
+    for (const entry of entries) {
+      const item = entry as { name?: unknown; isDir?: unknown } | null
+      if (item === null || item.isDir === true) continue
+      if (typeof item.name === 'string') names.add(item.name)
+    }
+    return remember(names)
+  } catch {
+    return remember(null)
+  }
+}
+
+/**
+ * 只留下「确认存在、且在当前项目里」的路径。三条判据都要过：
+ * ① 有会话 cwd；② 解析后的绝对路径在 cwd 之下；③ 该目录的清单里有同名文件。
+ * 任何一步拿不到（没装 betterSidebar、路由失败）都算「没确认」——加错一个链接
+ * 比少一个链接糟糕得多（点开 404 的编辑器页最烦人）。
+ */
+export async function existingInProject(
+  paths: readonly string[],
+  deps: FileLinkDeps,
+): Promise<Set<string>> {
+  const allowed = new Set<string>()
+  const sessionId = deps.sessionId()
+  const cwd = deps.cwd()
+  if (sessionId === null || cwd === undefined || cwd.trim() === '') return allowed
+  const byDir = new Map<string, string[]>()
+  for (const absolute of paths) {
+    if (!isInsideProject(cwd, absolute)) continue
+    const cut = absolute.lastIndexOf('/')
+    const dir = cut <= 0 ? '/' : absolute.slice(0, cut)
+    const bucket = byDir.get(dir)
+    if (bucket === undefined) byDir.set(dir, [absolute])
+    else bucket.push(absolute)
+  }
+  const listings = new Map<string, Set<string> | null>()
+  await Promise.all(
+    Array.from(byDir.keys()).map(async (dir) => {
+      listings.set(dir, await namesInDir(deps, dir, sessionId, cwd))
+    }),
+  )
+  for (const [dir, bucket] of byDir) {
+    const names = listings.get(dir) ?? null
+    if (names === null) continue
+    for (const absolute of bucket) {
+      if (names.has(basenameOf(absolute))) allowed.add(absolute)
+    }
+  }
+  return allowed
+}
+
+/**
+ * 把一个文本节点里**已确认存在**的路径包成 anchor（前缀/中间/后缀各一段文本）。
  * 返回是否改动过 DOM。
  */
-function splitTextNode(node: Text, cwd: string | undefined): boolean {
+function splitTextNode(node: Text, cwd: string, allowed: ReadonlySet<string>): boolean {
   const text = node.nodeValue ?? ''
-  const hits = scanPaths(text)
+  const hits = scanPaths(text).filter((hit) => allowed.has(resolveAgainst(cwd, hit.path)))
   if (hits.length === 0) return false
   const fragment = document.createDocumentFragment()
   let cursor = 0
@@ -259,20 +366,27 @@ function splitTextNode(node: Text, cwd: string | undefined): boolean {
   return true
 }
 
-/** 扫一个 markdown 根：先标记行内 code，再把正文文本节点切开。 */
-export function decorateRoot(root: HTMLElement, cwd: string | undefined): number {
-  let changed = 0
+/**
+ * 扫一个 markdown 根：先集齐行内 code 与正文文本里的候选路径，确认文件**真的在
+ * 项目里**之后，才标记元素 / 切开文本。返回改动数量。
+ */
+export async function decorateRoot(
+  root: HTMLElement,
+  cwd: string | undefined,
+  deps: FileLinkDeps,
+): Promise<number> {
+  if (cwd === undefined || cwd.trim() === '') return 0
+  const codeTargets: { element: HTMLElement; hit: FileHit }[] = []
   for (const code of Array.from(root.querySelectorAll<HTMLElement>('code'))) {
     if (code.closest('pre') !== null || code.hasAttribute(LINK_ATTR)) continue
     const text = (code.textContent ?? '').trim()
     if (text === '') continue
     const hits = scanPaths(text)
     if (hits.length !== 1 || hits[0].raw !== text) continue
-    markElement(code, hits[0], cwd)
-    changed += 1
+    codeTargets.push({ element: code, hit: hits[0] })
   }
 
-  const nodes: Text[] = []
+  const textTargets: { node: Text; hits: FileHit[] }[] = []
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node: Node): number {
       const parent = node.parentElement
@@ -283,18 +397,39 @@ export function decorateRoot(root: HTMLElement, cwd: string | undefined): number
     },
   })
   while (walker.nextNode() !== null) {
-    if (walker.currentNode instanceof Text) nodes.push(walker.currentNode)
+    const node = walker.currentNode
+    if (!(node instanceof Text)) continue
+    const hits = scanPaths(node.nodeValue ?? '')
+    if (hits.length > 0) textTargets.push({ node, hits })
   }
-  for (const node of nodes) {
+
+  const wanted = new Set<string>()
+  for (const target of codeTargets) wanted.add(resolveAgainst(cwd, target.hit.path))
+  for (const target of textTargets) {
+    for (const hit of target.hits) wanted.add(resolveAgainst(cwd, hit.path))
+  }
+  if (wanted.size === 0) return 0
+  const allowed = await existingInProject(Array.from(wanted), deps)
+  if (allowed.size === 0) return 0
+
+  let changed = 0
+  for (const target of codeTargets) {
+    if (!target.element.isConnected) continue
+    if (!allowed.has(resolveAgainst(cwd, target.hit.path))) continue
+    markElement(target.element, target.hit, cwd)
+    changed += 1
+  }
+  for (const target of textTargets) {
     // 上一个节点切开后可能连坐：节点已脱离文档就跳过
-    if (!node.isConnected) continue
-    if (splitTextNode(node, cwd)) changed += 1
+    if (!target.node.isConnected) continue
+    if (splitTextNode(target.node, cwd, allowed)) changed += 1
   }
   return changed
 }
 
 /**
- * 常驻：把聊天流里正文的路径变成可点击。返回 teardown。
+ * 常驻：把聊天流里正文的路径变成可点击（只限「确认存在的当前项目文件」）。
+ * 返回 teardown。
  *
  * 只在「内容静默 SETTLE_MS」之后动手——流式输出期间 React 正持有那些文本节点，
  * 拆开它会让文字停在旧内容上。
@@ -310,6 +445,9 @@ export function watchFileLinks(deps: FileLinkDeps): () => void {
     }
     /** 每个 markdown 根最后一次变化的时间。 */
     const touched = new WeakMap<Element, number>()
+    /** 每个根最近一次扫描的（内容戳, 时间）：内容没变就不重复扫，失败过 8s 后重试。 */
+    const attempted = new WeakMap<Element, { stamp: number; at: number }>()
+    const scanning = new WeakSet<Element>()
     const mark = (node: Node | null | undefined): void => {
       if (node === null || node === undefined) return
       const element = node instanceof Element ? node : node.parentElement
@@ -329,16 +467,23 @@ export function watchFileLinks(deps: FileLinkDeps): () => void {
 
     const sweep = (): void => {
       const now = Date.now()
+      // 没有 cwd 就什么都确认不了（会话摘要可能晚到），等下一轮
+      const cwd = cwdOf()
+      if (cwd === undefined || cwd.trim() === '') return
       for (const root of Array.from(document.querySelectorAll<HTMLElement>(`${ROW} ${MARKDOWN}`))) {
-        if (now - (touched.get(root) ?? 0) < SETTLE_MS) continue
+        const stamp = touched.get(root) ?? 0
+        if (now - stamp < SETTLE_MS) continue
         if (root.closest('[data-streaming]') !== null) continue
         // 插件自己的用户气泡（chip 气泡、引用详情）不掺和
         if (root.closest('.dsqe_row') !== null) continue
-        try {
-          decorateRoot(root, cwdOf())
-        } catch {
-          // 单条消息失败不影响其它
-        }
+        const last = attempted.get(root)
+        if (last !== undefined && last.stamp === stamp && now - last.at < RETRY_MS) continue
+        if (scanning.has(root)) continue
+        attempted.set(root, { stamp, at: now })
+        scanning.add(root)
+        void decorateRoot(root, cwd, deps)
+          .catch(() => 0)
+          .finally(() => scanning.delete(root))
       }
     }
 
