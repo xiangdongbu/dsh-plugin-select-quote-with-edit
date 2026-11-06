@@ -51,6 +51,25 @@ const SEEDED_TIME = (() => {
   return new Date(now.getFullYear(), 9, 30, 23, 29, 0, 0).getTime()
 })()
 const WITH_FAKE_QUOTE = new URLSearchParams(window.location.search).get('fakequote') === '1'
+/** `?nohost=1` — do not register the host user view: exercises the fallback bubble. */
+const NO_HOST_VIEW = new URLSearchParams(window.location.search).get('nohost') === '1'
+/** 1×1 transparent PNG: stands in for the host's authorized image URL. */
+const MOCK_IMAGE_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+/**
+ * The host's `loadImage`: async (returns a promise), and `peek` is the sync
+ * fast path the host's own `MessageImage` reads for its first paint.
+ */
+const mockLoadImage = Object.assign(
+  (attachment: unknown): Promise<string | undefined> => {
+    const id = (attachment as { attachmentId?: unknown } | undefined)?.attachmentId
+    return Promise.resolve(id === 'att-mock-1' ? MOCK_IMAGE_URL : undefined)
+  },
+  { peek: (attachment: unknown): string | undefined => {
+    const id = (attachment as { attachmentId?: unknown } | undefined)?.attachmentId
+    return id === 'att-mock-1' ? MOCK_IMAGE_URL : undefined
+  } },
+)
 
 // ---------------------------------------------------------------- module loader
 ;(window as unknown as Record<string, unknown>).__DSH_MODULES__ = {
@@ -173,14 +192,53 @@ function mockClock(time: number): string {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
+/** Host-shaped thumbnail: `loadImage` may answer with a promise (the host does). */
+function MockAttachmentImage(props: {
+  attachment: unknown
+  loadImage: (attachment: unknown) => string | undefined | Promise<string | undefined>
+}): React.ReactNode {
+  const { attachment, loadImage } = props
+  const [url, setUrl] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    let live = true
+    const result = loadImage(attachment)
+    if (typeof result === 'string') setUrl(result)
+    else if (result !== undefined) {
+      result.then((value) => {
+        if (live && typeof value === 'string') setUrl(value)
+      }).catch(() => {})
+    }
+    return () => {
+      live = false
+    }
+  }, [attachment, loadImage])
+  return url === undefined ? null : <img src={url} alt="" />
+}
+
 function UserMessageNodeView(props: Record<string, unknown>): React.ReactNode {
   const node = props.node as
     | { data?: { content?: unknown; time?: number } }
     | undefined
   const text = textOfContent(node?.data?.content)
   const time = typeof node?.data?.time === 'number' ? node.data.time : undefined
+  // Mirrors the host: attachments render above the bubble, through loadImage.
+  const loadImage = props.loadImage as
+    | ((attachment: unknown) => string | undefined | Promise<string | undefined>)
+    | undefined
+  const images = Array.isArray(node?.data?.content)
+    ? (node?.data?.content as { type?: unknown; attachment?: unknown }[]).filter(
+        (block) => block?.type === 'image' && block.attachment !== undefined,
+      )
+    : []
   return (
     <div className="ds-userRow" data-host-user="true">
+      {images.length > 0 && loadImage !== undefined ? (
+        <div className="ds-attachments" data-message-attachments="true">
+          {images.map((block, index) => (
+            <MockAttachmentImage key={index} attachment={block.attachment} loadImage={loadImage} />
+          ))}
+        </div>
+      ) : null}
       <div className="ds-bubble">{text}</div>
       <div className="ds-actions" data-clock="start">
         {time !== undefined ? <span className="ds-time">{mockClock(time)}</span> : null}
@@ -194,8 +252,10 @@ function UserMessageNodeView(props: Record<string, unknown>): React.ReactNode {
     </div>
   )
 }
-hostRegister('conversation.chat.node', { key: 'user' }, UserMessageNodeView)
-hostRegister('conversation.chat.node', { key: 'steering' }, UserMessageNodeView)
+if (!NO_HOST_VIEW) {
+  hostRegister('conversation.chat.node', { key: 'user' }, UserMessageNodeView)
+  hostRegister('conversation.chat.node', { key: 'steering' }, UserMessageNodeView)
+}
 
 // FAKE message plugin view (priority -10): chips for quoted content, host
 // delegation otherwise. Stands in for a leftover separate plugin.
@@ -581,6 +641,7 @@ function MessageRow({ msg }: { msg: Msg }): React.ReactNode {
       <div data-chat-flow-key={msg.key} data-chat-anchor-key={msg.key} data-chat-flow-kind="user">
         <NodeView
           node={{ data: { content: msg.content, time: msg.time ?? Date.now(), seq: msg.seq } }}
+          loadImage={mockLoadImage}
         />
       </div>
     )
@@ -698,24 +759,44 @@ function ComposerCard({ onSend }: { onSend: () => void }): React.ReactNode {
 function App(): React.ReactNode {
   const [ready, setReady] = useState(false)
   const [failed, setFailed] = useState<string | null>(null)
-  const [messages, setMessages] = useState<Msg[]>([
-    { key: 'm1', role: 'assistant', content: [{ type: 'text', text: ASSISTANT_SEED }], seq: 1 },
-    { key: 'm-file', role: 'assistant', content: [{ type: 'text', text: FILE_SEED }], seq: 2 },
-    { key: 'm-table', role: 'assistant', content: [{ type: 'text', text: TABLE_SEED }], seq: 3 },
-    {
-      key: 'm2',
-      role: 'user',
-      content: [
-        {
-          type: 'image',
-          attachment: { attachmentId: 'att-mock-1', mediaType: 'image/png', name: 'photo.png' },
-        },
-        { type: 'text', text: SEEDED_USER_WIRE },
-      ],
-      time: SEEDED_TIME,
-      seq: 2,
-    },
-  ])
+  const [messages, setMessages] = useState<Msg[]>(() => {
+    const seeded: Msg[] = [
+      { key: 'm1', role: 'assistant', content: [{ type: 'text', text: ASSISTANT_SEED }], seq: 1 },
+      { key: 'm-file', role: 'assistant', content: [{ type: 'text', text: FILE_SEED }], seq: 2 },
+      { key: 'm-table', role: 'assistant', content: [{ type: 'text', text: TABLE_SEED }], seq: 3 },
+      {
+        key: 'm2',
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            attachment: { attachmentId: 'att-mock-1', mediaType: 'image/png', name: 'photo.png' },
+          },
+          { type: 'text', text: SEEDED_USER_WIRE },
+        ],
+        time: SEEDED_TIME,
+        seq: 2,
+      },
+    ]
+    // With `?nohost=1` the host view is absent, so this plain image message
+    // (no quotes) takes the fallback bubble — the row that used to lose it.
+    if (NO_HOST_VIEW) {
+      seeded.push({
+        key: 'm-image',
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            attachment: { attachmentId: 'att-mock-1', mediaType: 'image/png', name: 'photo.png' },
+          },
+          { type: 'text', text: '看图说话' },
+        ],
+        time: SEEDED_TIME,
+        seq: 4,
+      })
+    }
+    return seeded
+  })
   const [echo, setEcho] = useState<string | null>(null)
 
   // Publish the live transcript for the mock rewind bridge and expose the

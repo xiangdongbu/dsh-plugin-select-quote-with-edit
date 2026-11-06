@@ -183,7 +183,7 @@ dsh web --patch "$PWD/dev.patch.yml"
 ## 本地验证
 
 ```bash
-npm run check        # typecheck + build + 164 项无头校验
+npm run check        # typecheck + build + 171 项无头校验
 npm run doctor       # 体检：仓库构建 / 已安装副本 / profile 依赖锁定 三者是否一致
 npm run mock         # mock 宿主 + http://127.0.0.1:4173/test/mock/app.html
 ```
@@ -225,6 +225,7 @@ Each item in the block below is text the user selected ...
 - 带引用的气泡由插件绘制，宿主的悬停动作行不可用，插件自绘「时间 + 复制 + 编辑 + 撤回」；普通消息零改动
 - 「撤回」的对话回退与文件还原由 `dsh-rewind-plugin` 提供；首次安装/升级需要能访问 npm 解析该依赖，装完需重启一次以加载其 Host 半部
 - 隐藏 `dsh-rewind-plugin` 自带 ↶ 按钮依赖其类名 `dsh-rewind-btn`；该插件若改名，两个撤回按钮会同时出现（功能不受影响）
+- 消息气泡里的图片由宿主的图片槽位渲染（`conversation.chat.user.images` → `conversation.images.content`）。本插件把传给宿主视图的 `loadImage` **归一成「永远返回 Promise、永不抛错」**：宿主自己的 `MessageImage` 直接 `load(attachment).then(...)`，一旦这个加载器返回字符串或 `undefined`（附件还没落盘/读不出），那行代码就抛错，而**抛错的槽位条目会被注册表永久摘除**（`abdicate`）——之后整个会话的用户消息都只剩文字、图片全没了，直到重启。另一处兜底：识别不到宿主视图时插件自绘的兜底气泡现在也会渲染图片附件（0.7.29）
 - 正文文件链接需要 `dsh-better-sidebar` 提供 `openFile` 与 `fs.tree`；它若改了方法名或路由，链接会整体退化为纯文本（不会点出错页面）
 - 宽表格收口依赖宿主包装层类名含 `md-table-wide`、markdown 根类名含 `markdown`
 - 会话行「只留 ⋯ 菜单」依赖宿主行结构 `div[data-row-key=session:*] > [span._rowActions]`，第一子节点是菜单按钮；结构改了这条规则会失配（不会误伤其它行）

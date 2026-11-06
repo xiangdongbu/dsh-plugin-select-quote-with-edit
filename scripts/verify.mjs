@@ -1405,6 +1405,58 @@ check(
   rmSync(wdir, { recursive: true, force: true })
 }
 
+// ---------------------------------------------------------------- attachments
+{
+  const loader = await compileModule('src/client/attachment-loader.ts', join(tmp, 'attachment-loader.cjs'))
+  check(
+    'attachments: a missing loader stays missing',
+    loader.normalizeLoader(undefined) === undefined,
+  )
+  const sync = loader.normalizeLoader((attachment) => `url:${attachment}`)
+  check('attachments: a synchronous URL becomes a promise', (await sync('x')) === 'url:x')
+  const missing = loader.normalizeLoader(() => undefined)
+  check('attachments: an undefined answer still resolves', (await missing('x')) === undefined)
+  const boom = loader.normalizeLoader(() => {
+    throw new Error('unreadable attachment')
+  })
+  check(
+    'attachments: a throwing loader resolves undefined instead of throwing',
+    (await boom('x')) === undefined,
+  )
+  const peeked = loader.normalizeLoader(
+    Object.assign((attachment) => Promise.resolve(`p:${attachment}`), { peek: () => 'peeked' }),
+  )
+  check(
+    'attachments: side properties such as peek survive normalization',
+    peeked.peek() === 'peeked' && (await peeked('a')) === 'p:a',
+    String(peeked.peek()),
+  )
+}
+
+// ---------------------------------------------------------------- host delegate
+{
+  const hostNode = await compileModule('src/client/host-node.ts', join(tmp, 'host-node.cjs'))
+  const self = () => null
+  const memoHost = { type: { name: 'UserMessageNodeView' } }
+  const first = hostNode.pickDelegate(
+    [{ options: { key: 'user' }, component: memoHost }],
+    self,
+    'user',
+  )
+  const afterEmpty = hostNode.pickDelegate([], self, 'user')
+  check(
+    'host node: the identified host view sticks when the registry read comes back empty',
+    first?.kind === 'host' &&
+      afterEmpty?.kind === 'host' &&
+      afterEmpty.component === memoHost,
+    JSON.stringify([first?.kind, afterEmpty?.kind]),
+  )
+  check(
+    'host node: an empty registry with no prior knowledge still falls back',
+    hostNode.pickDelegate([], self, 'steering') === undefined,
+  )
+}
+
 // ---------------------------------------------------------------- file links
 {
   const fileLinks = await compileModule('src/client/file-links.ts', join(tmp, 'file-links.cjs'))

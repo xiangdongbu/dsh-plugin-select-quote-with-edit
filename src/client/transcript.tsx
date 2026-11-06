@@ -1,9 +1,10 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { scanQuotes, type ParsedQuote } from './protocol.ts'
 import { QuoteChip, type QuoteLike } from './chip.tsx'
 import { openDetail } from './detail.tsx'
 import { locateQuote } from './locate.ts'
 import { pickDelegate } from './host-node.ts'
+import { normalizeLoader, type ImageLoader } from './attachment-loader.ts'
 import { registerMessage, type ImageRef } from './registry.ts'
 import { ensureHostButtons } from './chrome.ts'
 import { runtime } from './runtime.ts'
@@ -100,7 +101,7 @@ function openChip(quote: ParsedQuote, index: number): void {
  */
 function AttachmentImage(props: {
   attachment: unknown
-  loadImage: (attachment: unknown) => string | undefined | Promise<string | undefined>
+  loadImage: ImageLoader
 }): React.ReactNode {
   const { attachment, loadImage } = props
   const [url, setUrl] = useState<string | undefined>(undefined)
@@ -130,6 +131,27 @@ function AttachmentImage(props: {
     }
   }, [attachment, loadImage])
   return url === undefined ? null : <img src={url} alt="" />
+}
+
+/**
+ * The message's image attachments, above the bubble (the order the composer
+ * showed). Used by the quote bubble and by the fallback bubble — the fallback
+ * used to render text only, so a row whose host view could not be identified
+ * silently lost its images.
+ */
+function Attachments(props: {
+  attachments: readonly unknown[]
+  loadImage: ImageLoader | undefined
+}): React.ReactNode {
+  const { attachments, loadImage } = props
+  if (attachments.length === 0 || loadImage === undefined) return null
+  return (
+    <div className="dsqe-userImages" data-message-attachments="true">
+      {attachments.map((attachment, index) => (
+        <AttachmentImage key={`image-${index}`} attachment={attachment} loadImage={loadImage} />
+      ))}
+    </div>
+  )
 }
 
 /**
@@ -285,6 +307,10 @@ export function UserMessageView(
   const scanned = scanQuotes(raw)
   const text = scanned.rest.trim()
   const delegate = delegateOf?.()
+  const rawLoader = rest.loadImage as ImageLoader | undefined
+  // The host view re-enters the host's own image pipeline; hand it a loader
+  // that always answers with a promise (see normalizeLoader).
+  const hostLoader = useMemo(() => normalizeLoader(rawLoader), [rawLoader])
   const rewrittenNode =
     delegate?.kind === 'host' && text !== raw.trim()
       ? {
@@ -292,6 +318,9 @@ export function UserMessageView(
           data: { ...node?.data, content: strippedContent(node?.data?.content, text) },
         }
       : node
+  const images = imageAttachments(node?.data?.content)
+  const hostProps: Record<string, unknown> =
+    hostLoader === undefined ? rest : { ...rest, loadImage: hostLoader }
 
   let content: React.ReactNode
   if (delegate !== undefined && delegate.kind === 'plugin') {
@@ -303,24 +332,15 @@ export function UserMessageView(
         <Delegate {...rest} node={node} />
       ) : (
         <div className="dsqe-fallbackRow">
+          <Attachments attachments={images} loadImage={rawLoader} />
           <div className="dsqe-fallbackBubble">{text}</div>
         </div>
       )
   } else if (scanned.quotes.length > 0) {
-    const images = imageAttachments(node?.data?.content)
-    const loadImage = rest.loadImage as
-      | ((attachment: unknown) => string | undefined)
-      | undefined
     content = (
       <div className="dsqe-userRow">
         <div className="dsqe-userStack" data-dsqe-quote-bubble="true">
-          {images.length > 0 && loadImage !== undefined ? (
-            <div className="dsqe-userImages" data-message-attachments="true">
-              {images.map((attachment, index) => (
-                <AttachmentImage key={`image-${index}`} attachment={attachment} loadImage={loadImage} />
-              ))}
-            </div>
-          ) : null}
+          <Attachments attachments={images} loadImage={rawLoader} />
           <div className="dsqe-bubble">
             <div className="dsqe-bubbleRow">{bubbleContent(text, scanned.quotes, true)}</div>
           </div>
@@ -333,9 +353,10 @@ export function UserMessageView(
       | undefined
     content =
       Host !== undefined ? (
-        <Host {...rest} node={rewrittenNode} />
+        <Host {...hostProps} node={rewrittenNode} />
       ) : (
         <div className="dsqe-fallbackRow">
+          <Attachments attachments={images} loadImage={rawLoader} />
           <div className="dsqe-fallbackBubble">{text}</div>
         </div>
       )

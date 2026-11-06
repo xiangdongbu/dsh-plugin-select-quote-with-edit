@@ -47,6 +47,7 @@ src/client/title-pin.ts          # 带胶囊的首条消息把会话标题钉成
 src/client/echo-strip.ts         # 回显/排队预览的协议块剥离
 src/client/wide-tables.ts        # 正文宽表格按实测像素收口（包装层会跑出父级）
 src/client/file-links.ts         # 正文里的文件路径：确认存在才可点，悬停下划线 + 右侧打开
+src/client/attachment-loader.ts  # 把宿主的 loadImage 归一成「永远 Promise、永不抛错」（0.7.29）
 src/client/index.tsx             # 客户端入口
 scripts/build.mjs / verify.mjs / build-mock.mjs / serve-mock.mjs / sync-desktop.mjs
 test/mock/                       # mock dsh 客户端（含 -10 模拟消息插件，?fakequote=1）
@@ -72,6 +73,9 @@ user/steering 选举胜出后，视图只输出 `display: contents` 标记（`da
 - 引用消息自绘 chip 气泡（`data-dsqe-quote-bubble`，只渲染「引用 chip + 正文」，不再在下方重复引用全文——top 胶囊已表达引用，悬停 chip 看全文）；普通消息委托宿主 `UserMessageNodeView`（组件名识别，node 原样）；宿主视图缺失时兜底纯文本气泡；
 - 引用行加 `dsqe_rowQuote` 恒定预留操作行高度（`calc(28px + font-delta)`），使悬停操作行显示/隐藏不改变布局（不再上下跳动）；
 - 其他消息插件视图（负优先级）存在时整行委托给它（共存），标记与注册照常。
+- **委托对象记在模块级内存里（0.7.29）**：`slots.entries()` 是活的注册表读取，切会话 / 重挂载 / 某个条目被摘除的瞬间可能读不到宿主视图；每次渲染都重新判定就会把那一行悄悄换成兜底气泡。`pickDelegate` 一旦认出击宿主组件（按组件名 `UserMessageNodeView`，或唯一候选）就记住它，后续读空也继续用它；插件视图（负优先级）仍然每次重新投票，免得共存插件切换后不生效。
+- **交给宿主视图的 `loadImage` 会被归一（0.7.29，attachment-loader.ts）**：宿主的 `MessageImage` 写的是 `load(attachment).then(...)`，所以加载器只要返回字符串或 `undefined`（附件还没可读）就会抛错；而**抛错的槽位条目会被注册表 `abdicate` 永久摘除**，之后整个会话的用户消息都只剩文字、图片全没，直到重启。归一后的加载器永远返回 Promise、永不抛错，旁挂属性（`peek`，宿主首帧同步读）原样带过去；同一个原函数只包装一次（WeakMap），免得每次渲染换身份把宿主的图片 effect 触发一遍。
+- **兜底气泡也渲染图片（0.7.29）**：识别不到宿主视图时用的是插件自绘气泡，之前只画文字——图片和引用胶囊都会消失。现在图片附件走同一套 `Attachments`（`data-message-attachments` + `loadImage`），与引用气泡一致。
 
 ### 划词引用链（继承自 select-quote-simple，原样保留）
 选区准入（起止都在 `[data-chat-flow-key]` 且不在 composer）→ 工具条浮出 → 「添加到对话」进 store（按会话持久化）→ 输入框**行内胶囊**（插在光标处，见下文《输入框行内胶囊》；U+200B 保发送键）→ 发送手势捕获阶段折叠成协议块 → 回显剥离 → 气泡内 chip 回显 → 撤回还原。
@@ -249,3 +253,4 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 | 编辑/撤回按钮时有时无，重启也不稳定 | 先跑 `npm run doctor`。九成是**已安装副本被插件管理器按锁文件回滚**了：`~/.dsh/profiles/<profile>/pnpm-lock.yaml` 钉着旧 commit，装/卸任何插件都会重跑 install 把 `node_modules/<包名>` 换回那个版本（`doctor` 会显示「已安装版本 ≠ 仓库版本」或「锁文件提交 ≠ 本地 HEAD」）。修法：把 profile 依赖改成 `github:<owner>/<repo>#<本地HEAD>`（或 `link:` 到工作副本），再 `npm run sync:desktop` |
 | 正文里的文件路径点了没反应 / 不该有下划线的地方有 | 先看 `betterSidebar` 是否拿到（`ctx.inject(['betterSidebar'], …)`；未装 `dsh-better-sidebar` 只会弹提示）；再确认命中的是不是**路径**：`file-links.ts` 只认「已知扩展名 + 两侧边界」，URL / 域名 / `a/b` 会被跳过，流式输出中的消息要等静默 700ms 才会被扫到（`[data-streaming]` 子树直接跳过）。相对路径按会话 cwd 解析，cwd 缺失时原样交给宿主 |
 | 回应正文里的表格样式被压坏 / 撑出正文列 | 目标形态是「表格样式原样 + 滚动区域 = 正文列宽」：`wide-tables.ts` **只**把包装层 `.md-table-wide` 钉成实测正文列宽并给 `overflow-x: auto`，表格保持 `width: max-content`（列宽按内容分配、单元格沿用宿主 `max-width: min(30vw,320px)` 上限），所以看起来还是原来那张表，放不下就在边界内横向滚。别再把表格压成正文列宽（那会把每列挤成几个字符），也别去掉单元格上限（自然宽度会飙到 2000px+）。两个坑：① wrapper 一旦成为滚动容器，`table.getBoundingClientRect().left` 会跟着 scrollLeft 变——溢出时**不能**再做 margin-left 几何对齐，否则和用户滚动打架；② 宿主的宽表格包装层会跑出父级（实测 1512 > 748），纯 CSS 百分比收不住，必须写像素 |
+| 发出去的消息图片不见了（会话日志里明明有 image 块） | 图片只在渲染层丢，发/收都没问题。两条链要分开看：① 宿主视图被我们委托时，`loadImage` 必须归一成 Promise（`attachment-loader.ts`）——返回字符串/`undefined` 会让宿主 `MessageImage` 抛错，而抛错的槽位条目被 `abdicate` **永久摘除**，该会话之后所有用户图片都没了（重启才回来）；② `pickDelegate` 读空时要退回「上次认出的宿主视图」，否则兜底气泡接管这一行；兜底气泡 0.7.29 起也会画图片。排查顺序：`session.v4.jsonl.zstd` 里确认 image 块在 → 看该行有没有 `data-dsqe-user` + 宿主 `[data-message-attachments]` → 有兜底 `dsqe-fallbackRow` 就是委托失败 |

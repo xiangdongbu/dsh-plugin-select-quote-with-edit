@@ -30,6 +30,17 @@ export function componentName(component: unknown): string | undefined {
 }
 
 /**
+ * The host view we already identified, per slot key. `slots.entries()` is a
+ * live registry read: during a session switch, a re-mount, or right after a
+ * host entry was retired for a render error it can come back without the
+ * host's view — and re-deciding per render would then quietly swap the row to
+ * our fallback bubble (which renders less than the host view does). Once the
+ * host view is known it stays known: the component identity never changes for
+ * a given host build.
+ */
+const rememberedHost = new Map<string, Delegate>()
+
+/**
  * The delegate registered for `key`, or undefined when it cannot be
  * identified safely. Plugin views (negative priority, lowest first) win over
  * the host; the host view is identified by component name. More than one
@@ -55,10 +66,14 @@ export function pickDelegate(
   }
   const named = candidates.find((entry) => componentName(entry.component) === HOST_NODE_NAME)
   if (named !== undefined && named.component != null) {
-    return { component: named.component, kind: 'host' }
+    const host: Delegate = { component: named.component, kind: 'host' }
+    rememberedHost.set(key, host)
+    return host
   }
   if (candidates.length === 1 && candidates[0]?.component != null) {
-    return { component: candidates[0].component, kind: 'host' }
+    const host: Delegate = { component: candidates[0].component, kind: 'host' }
+    rememberedHost.set(key, host)
+    return host
   }
-  return undefined
+  return rememberedHost.get(key)
 }
