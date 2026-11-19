@@ -7,7 +7,7 @@ import { pickDelegate } from './host-node.ts'
 import { normalizeLoader, type ImageLoader } from './attachment-loader.ts'
 import { registerMessage, type ImageRef } from './registry.ts'
 import { ensureHostButtons } from './chrome.ts'
-import { FileRefChip } from './file-chips.tsx'
+import { FileRefChip, isMentionRuleActive } from './file-chips.tsx'
 import { mentionsInText } from './file-mention.ts'
 import { runtime } from './runtime.ts'
 import type { UserMessageProps } from './context.d.ts'
@@ -371,7 +371,7 @@ export function UserMessageView(
           <div className="dsqe-fallbackBubble">{text}</div>
         </div>
       )
-  } else if (scanned.quotes.length > 0) {
+  } else if (scanned.quotes.length > 0 || (mentionsInText(text).length > 0 && !isMentionRuleActive())) {
     content = (
       <div className="dsqe-userRow">
         <div className="dsqe-userStack" data-dsqe-quote-bubble="true">

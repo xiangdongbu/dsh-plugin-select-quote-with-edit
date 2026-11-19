@@ -32,6 +32,7 @@ import {
   registerFileMentionRule,
   registerFileSource,
   setFileOpener,
+  setMentionRuleActive,
   watchFileDrops,
 } from './file-chips.tsx'
 import { FILE_NODE_ID } from './file-mention.ts'
@@ -179,8 +180,6 @@ export function apply(ctx: ClientContext): void {
    * an optional child scope, exactly like `dsh-rewind-plugin` does.
    */
   const injected: { uiConversation?: unknown; conversation?: unknown; betterSidebar?: unknown } = {}
-  /** 正文引用规则（`uiConversation.userText`）的注销句柄。 */
-  let mentionRuleDispose: (() => void) | null = null
   ctx.effect(() => {
     const inject = (ctx as unknown as {
       inject?: (names: readonly string[], callback: (child: Record<string, unknown>) => unknown) => unknown
@@ -198,21 +197,57 @@ export function apply(ctx: ClientContext): void {
       }
       injected.uiConversation = read('uiConversation')
       injected.conversation = read('conversation')
-      // 拖入文件后消息里留下的是 `@/abs/path`：把解析规则挂回正文渲染管线，
-      // 发送后才会显示成和输入框一致的文件 / 文件夹胶囊。
-      mentionRuleDispose?.()
-      mentionRuleDispose = registerFileMentionRule(injected.uiConversation)
       // The snapshot may only become readable now: re-run the rail ghost sync.
       syncGhostsSoon()
     })
     return () => {
       injected.uiConversation = undefined
       injected.conversation = undefined
-      mentionRuleDispose?.()
-      mentionRuleDispose = null
       if (typeof dispose === 'function') (dispose as () => void)()
     }
   }, 'select-quote-with-edit: uiConversation scope')
+
+  /**
+   * 正文引用规则：拖入的文件在消息里是 `@/绝对路径` 文本，需要这条规则把它解析
+   * 成节点，再由 `conversation.user.text.node` 上的 `FileRefChip` 画成胶囊。
+   *
+   * 两处坑：① `uiConversation` 不是本插件的注入依赖，`injected`（可选子作用域）
+   * 完全可能一直读不到 —— 别的功能都还有 `safeGet` 兜底，这里原先没有，于是规则
+   * 静默不注册，发送后就只剩一行纯文本；② 服务可能比 `apply()` 晚就绪。所以这
+   * 里用「`injected` → `safeGet` → 定时重试」三级取，注册成功才置位
+   * `mentionRuleActive`。
+   */
+  ctx.effect(() => {
+    let stopped = false
+    let dispose: (() => void) | null = null
+    let attempts = 0
+    let timer: ReturnType<typeof setInterval> | null = null
+    const install = (): boolean => {
+      if (stopped || dispose !== null) return true
+      const handle = registerFileMentionRule(injected.uiConversation ?? safeGet('uiConversation'))
+      if (handle === null) return false
+      dispose = handle
+      setMentionRuleActive(true)
+      return true
+    }
+    if (!install()) {
+      timer = setInterval(() => {
+        attempts += 1
+        if (install() || attempts >= 40) {
+          if (timer !== null) clearInterval(timer)
+          timer = null
+        }
+      }, 250)
+    }
+    return () => {
+      stopped = true
+      if (timer !== null) clearInterval(timer)
+      timer = null
+      setMentionRuleActive(false)
+      dispose?.()
+      dispose = null
+    }
+  }, 'select-quote-with-edit: file mention rule')
 
   /**
    * `betterSidebar` (dsh-better-sidebar) is the plugin that owns the right-hand

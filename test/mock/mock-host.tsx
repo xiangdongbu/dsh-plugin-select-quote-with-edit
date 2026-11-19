@@ -780,6 +780,15 @@ function App(): React.ReactNode {
         time: SEEDED_TIME,
         seq: 2,
       },
+      {
+        // 只有文件引用、没有引用块：正文规则没挂上时（mock 里永远没挂上）
+        // 这条消息必须由我们自己的气泡画胶囊。
+        key: 'm-fileonly',
+        role: 'user',
+        content: [{ type: 'text', text: '@/mock/project/app/utils/offlinePack.ts 这个文件干什么的' }],
+        time: SEEDED_TIME,
+        seq: 5,
+      },
     ]
     // With `?nohost=1` the host view is absent, so this plain image message
     // (no quotes) takes the fallback bubble — the row that used to lose it.

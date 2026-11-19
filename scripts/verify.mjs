@@ -1746,6 +1746,32 @@ check(
     'file chips: the user-text rule is handed to uiConversation.userText',
     rules.length === 1 && rules[0].id === 'dsqe-file',
   )
+  check(
+    'file chips: a missing userText service is reported so the caller can retry',
+    chipsModule.registerFileMentionRule(undefined) === null &&
+      chipsModule.registerFileMentionRule({}) === null &&
+      chipsModule.registerFileMentionRule({ userText: {} }) === null,
+  )
+  check(
+    'file chips: a duplicate registration still counts as registered',
+    typeof chipsModule.registerFileMentionRule({
+      userText: {
+        register: () => {
+          throw new Error('already registered')
+        },
+      },
+    }) === 'function',
+  )
+  check(
+    'file chips: the active flag tells the node view whether to draw chips itself',
+    (() => {
+      const before = chipsModule.isMentionRuleActive()
+      chipsModule.setMentionRuleActive(true)
+      const on = chipsModule.isMentionRuleActive()
+      chipsModule.setMentionRuleActive(false)
+      return before === false && on === true && chipsModule.isMentionRuleActive() === false
+    })(),
+  )
 
   const realBridge = globalThis.__DSH_HOST_PATHS__
   globalThis.__DSH_HOST_PATHS__ = { pathFor: (file) => file?.__path ?? '' }

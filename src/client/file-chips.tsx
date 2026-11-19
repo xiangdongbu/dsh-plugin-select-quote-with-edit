@@ -192,20 +192,40 @@ function toDisposer(value: unknown): () => void {
 }
 
 /**
- * 把正文规则挂到 `uiConversation.userText`。服务没就绪时什么都不做（正文退回
- * 纯文本，不影响别的功能）。
+ * 把正文规则挂到 `uiConversation.userText`。
+ *
+ * 服务形状不对（还没挂载 / 不是宿主那一版）时返回 `null`，调用方据此重试；
+ * 返回函数 = 注册成功（宿主返回的 disposer 形状不保证，统一包一层）。
  */
-export function registerFileMentionRule(uiConversation: unknown): () => void {
+export function registerFileMentionRule(uiConversation: unknown): (() => void) | null {
   const service = uiConversation as
     | { userText?: { register?: (rule: unknown) => unknown } }
     | undefined
   const register = service?.userText?.register
-  if (typeof register !== 'function' || service?.userText === undefined) return () => {}
+  if (typeof register !== 'function' || service?.userText === undefined) return null
   try {
     return toDisposer(register.call(service.userText, fileMentionRule))
   } catch {
+    // 重复注册（我们自己的重试撞上先前那次）也算成功：规则已经在注册表里。
     return () => {}
   }
+}
+
+/**
+ * 正文规则是否真的挂上了。
+ *
+ * 挂上时宿主的 `UserText` 会把 `@/abs/path` 解析成我们注册的节点，再由
+ * `FileRefChip` 画成胶囊；挂不上（服务未就绪、宿主版本变了）时消息里只剩
+ * 纯文本 —— 此时由 node view 自己画胶囊兜底，见 transcript.tsx。
+ */
+let mentionRuleActive = false
+
+export function isMentionRuleActive(): boolean {
+  return mentionRuleActive
+}
+
+export function setMentionRuleActive(value: boolean): void {
+  mentionRuleActive = value
 }
 
 /** 桌面端桥：真实路径（Electron 的 webUtils.getPathForFile）。 */

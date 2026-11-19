@@ -214,6 +214,15 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
   `fileTransfer()` 的判定（它只看 `dataTransfer.types`）→ `reset()` 执行、遮罩消失；`files` 为空 →
   `onAddFiles` 不会被调用，不会重复插入。合成期间用 `releasing` 标记让自己跳过它，插入逻辑放在
   `try/finally` 里，即使插入抛错也照样收遮罩。
+- **规则注册（0.7.32）**：`conversation.user.text.node` 只是渲染器，真正把 `@/abs/path` 切出来的是
+  `uiConversation.userText.register(rule)` 注册的 `dsqe-file` 规则（`order: 5`，压过宿主的 `file`(30)）。
+  这条注册曾经只从可选子作用域 `injected.uiConversation` 取服务 —— 而本插件其余地方都还有
+  `safeGet('uiConversation')` 兜底，于是子作用域读不到时**只有规则静默失效**，发送后就剩一行裸文本
+  （宿主自己的 `file` 规则要 `ui-reference` 装好才在）。现在改成三级取：`injected` → `ctx.get` →
+  250ms × 40 重试，成功才 `setMentionRuleActive(true)`。
+- **兜底渲染**：`mentionRuleActive` 为 false 且消息里有 `@/路径` 时，node view 不再委托宿主视图，而是用
+  自己的气泡（`dsqe-userRow` → `bubbleTextNodes`）把路径画成胶囊。这样即使规则永远挂不上，发送后
+  仍是胶囊；规则挂上时走宿主气泡，观感与宿主一致。
 - **退化顺序**：拿不到路径 → 不拦拖放；插不进胶囊 → 插路径文本 + 轻提示；`uiConversation.userText` 拿不到 →
   发送后显示 `@/路径` 纯文本。任何一步失败都不会吞内容。
 
@@ -286,5 +295,6 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 | 正文里的文件路径点了没反应 / 不该有下划线的地方有 | 先看 `betterSidebar` 是否拿到（`ctx.inject(['betterSidebar'], …)`；未装 `dsh-better-sidebar` 只会弹提示）；再确认命中的是不是**路径**：`file-links.ts` 只认「已知扩展名 + 两侧边界」，URL / 域名 / `a/b` 会被跳过，流式输出中的消息要等静默 700ms 才会被扫到（`[data-streaming]` 子树直接跳过）。相对路径按会话 cwd 解析，cwd 缺失时原样交给宿主 |
 | 回应正文里的表格样式被压坏 / 撑出正文列 | 目标形态是「表格样式原样 + 滚动区域 = 正文列宽」：`wide-tables.ts` **只**把包装层 `.md-table-wide` 钉成实测正文列宽并给 `overflow-x: auto`，表格保持 `width: max-content`（列宽按内容分配、单元格沿用宿主 `max-width: min(30vw,320px)` 上限），所以看起来还是原来那张表，放不下就在边界内横向滚。别再把表格压成正文列宽（那会把每列挤成几个字符），也别去掉单元格上限（自然宽度会飙到 2000px+）。两个坑：① wrapper 一旦成为滚动容器，`table.getBoundingClientRect().left` 会跟着 scrollLeft 变——溢出时**不能**再做 margin-left 几何对齐，否则和用户滚动打架；② 宿主的宽表格包装层会跑出父级（实测 1512 > 748），纯 CSS 百分比收不住，必须写像素 |
 | 拖完文件后整屏停在「文件或图片拖动到此处即可添加」，点哪都没用 | 宿主的拖放遮罩只由它自己的 `document` drop（`reset()`：`dragDepth=0` + `setDragActive(false)`）和窗口级 `dragend` 收口，外部拖入没有 `dragend`。我们截断真实 drop 后必须补发一颗空 drop（`releaseHostDropOverlay`），若这行还在，说明补发没发出去（`releasing` 标记失效或 `document.dispatchEvent` 被别的插件拦了） |
+| 发送后 `@/路径` 仍是一行纯文本、没有胶囊 | 先看规则有没有挂上：`UI` 里若 `mentionRuleActive` 为 false，说明 `uiConversation.userText.register` 没成功（子作用域没读到 + `ctx.get` 也还没就绪）；0.7.32 起这种情况由节点视图自绘胶囊兜底，所以「还是纯文本」只可能是连节点视图都没接管（`pickDelegate` 认不出宿主视图时也会走我们自己的气泡）。再核 `conversation.user.text.node` 上 key `dsqe-file` 的条目是否存在 |
 | 拖进输入框的文件变成一行裸路径、没有胶囊 | 说明我们的 `drop` 拦截没生效或插入失败。三个断点：① `globalThis.__DSH_HOST_PATHS__` 是否存在（只有桌面端预加载有）；② 落点是否在 `[data-lexical-editor="true"]` 里（我们只接管输入框）；③ `editor._nodes.get('reference-chip')` 是否有类（宿主节点类型被改名时插入会返回 false，此时会插入路径文本 + 提示「插入胶囊失败」） |
 | 发出去的消息图片不见了（会话日志里明明有 image 块） | 图片只在渲染层丢，发/收都没问题。两条链要分开看：① 宿主视图被我们委托时，`loadImage` 必须归一成 Promise（`attachment-loader.ts`）——返回字符串/`undefined` 会让宿主 `MessageImage` 抛错，而抛错的槽位条目被 `abdicate` **永久摘除**，该会话之后所有用户图片都没了（重启才回来）；② `pickDelegate` 读空时要退回「上次认出的宿主视图」，否则兜底气泡接管这一行；兜底气泡 0.7.29 起也会画图片。排查顺序：`session.v4.jsonl.zstd` 里确认 image 块在 → 看该行有没有 `data-dsqe-user` + 宿主 `[data-message-attachments]` → 有兜底 `dsqe-fallbackRow` 就是委托失败 |
