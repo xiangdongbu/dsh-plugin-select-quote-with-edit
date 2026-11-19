@@ -38,7 +38,7 @@ export const QUOTE_SOURCE = 'dsh-quote'
  */
 const SOURCE_TRIGGER = '\u0002'
 
-interface ChipInsert {
+export interface ChipInsert {
   source: string
   ref: string
   label: string
@@ -861,6 +861,40 @@ export function resetInlineChips(): void {
 function chipInDom(): boolean {
   if (typeof document === 'undefined') return false
   return document.querySelector(`[data-composer-chip="${QUOTE_SOURCE}"]`) !== null
+}
+
+/**
+ * 插入一个任意来源的引用胶囊（拖入的文件 / 文件夹用）。
+ *
+ * 和 {@link insertQuoteChip} 共用同一套拾取与落座逻辑，但不碰 quote 的
+ * presence/owned 记账：文件胶囊的 ref 是路径，由调用方自己管（重复拖同一个
+ * 文件就该出现两颗胶囊）。返回 false = 宿主放不下，调用方退回纯文本。
+ */
+export function insertReferenceChip(insert: ChipInsert): boolean {
+  const editor = ensureAttached()
+  if (!editor) {
+    trace('insert-ref:no-editor', insert.ref)
+    return false
+  }
+  const Klass = chipClassOf(editor)
+  if (!Klass) {
+    trace('insert-ref:no-class', insert.ref)
+    return false
+  }
+  let placed = false
+  try {
+    editor.update?.(
+      () => {
+        placed = placeChip(editor, Klass, insert)
+      },
+      { discrete: true },
+    )
+  } catch (error) {
+    trace('insert-ref:threw', String(error))
+    return false
+  }
+  trace('insert-ref:placed', { ref: insert.ref, placed })
+  return placed
 }
 
 /**

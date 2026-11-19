@@ -22,10 +22,19 @@ import { watchWideTables } from './wide-tables.ts'
 import {
   currentSessionId,
   cwdOfSession,
+  openFileLink,
   showFileHint,
   watchFileLinks,
   type BetterSidebarLike,
 } from './file-links.ts'
+import {
+  FileRefChip,
+  registerFileMentionRule,
+  registerFileSource,
+  setFileOpener,
+  watchFileDrops,
+} from './file-chips.tsx'
+import { FILE_NODE_ID } from './file-mention.ts'
 import { watchQuotePaste } from './paste.ts'
 import { registerQuoteSource, watchChipDeletion } from './inline-chips.ts'
 import { watchChipClipboard } from './chip-clipboard.ts'
@@ -170,6 +179,8 @@ export function apply(ctx: ClientContext): void {
    * an optional child scope, exactly like `dsh-rewind-plugin` does.
    */
   const injected: { uiConversation?: unknown; conversation?: unknown; betterSidebar?: unknown } = {}
+  /** 正文引用规则（`uiConversation.userText`）的注销句柄。 */
+  let mentionRuleDispose: (() => void) | null = null
   ctx.effect(() => {
     const inject = (ctx as unknown as {
       inject?: (names: readonly string[], callback: (child: Record<string, unknown>) => unknown) => unknown
@@ -187,12 +198,18 @@ export function apply(ctx: ClientContext): void {
       }
       injected.uiConversation = read('uiConversation')
       injected.conversation = read('conversation')
+      // 拖入文件后消息里留下的是 `@/abs/path`：把解析规则挂回正文渲染管线，
+      // 发送后才会显示成和输入框一致的文件 / 文件夹胶囊。
+      mentionRuleDispose?.()
+      mentionRuleDispose = registerFileMentionRule(injected.uiConversation)
       // The snapshot may only become readable now: re-run the rail ghost sync.
       syncGhostsSoon()
     })
     return () => {
       injected.uiConversation = undefined
       injected.conversation = undefined
+      mentionRuleDispose?.()
+      mentionRuleDispose = null
       if (typeof dispose === 'function') (dispose as () => void)()
     }
   }, 'select-quote-with-edit: uiConversation scope')
@@ -223,6 +240,50 @@ export function apply(ctx: ClientContext): void {
       if (typeof dispose === 'function') (dispose as () => void)()
     }
   }, 'select-quote-with-edit: betterSidebar scope')
+
+  /**
+   * 拖入的文件 / 文件夹：输入框胶囊、点击路由、正文渲染三处共用一个打开入口。
+   * 右侧栏服务可能比 apply() 晚就绪，所以每次点击时现取。
+   */
+  const sidebarService = (): BetterSidebarLike | null =>
+    (injected.betterSidebar as BetterSidebarLike | undefined) ??
+    (safeGet('betterSidebar') as BetterSidebarLike | undefined) ??
+    null
+  const openPath = (path: string): boolean =>
+    openFileLink(path, undefined, {
+      sessionId: () => currentSessionId(safeGet('sessions')),
+      cwd: () => cwdOfSession(safeGet('sessions'), currentSessionId(safeGet('sessions'))),
+      service: sidebarService,
+      hint: showFileHint,
+    })
+  setFileOpener(openPath)
+  ctx.effect(() => () => setFileOpener(null), 'select-quote-with-edit: file chip opener')
+
+  // 文件胶囊自己的引用来源：序列化成 `@路径`，点击转给右侧编辑器。
+  ctx.effect(
+    () => registerFileSource(ctx, { openFile: openPath }),
+    'select-quote-with-edit: file chip source',
+  )
+
+  // 只在输入框里接管拖放，且只处理拿得到真实路径的非图片文件 / 文件夹
+  // （图片仍然走宿主的附件上传）。
+  ctx.effect(
+    () => watchFileDrops({ openFile: openPath, hint: showFileHint }),
+    'select-quote-with-edit: file drops',
+  )
+
+  // 拖入后留在消息里的那段 `@/abs/path` 由这个正文节点渲染成同样的胶囊。
+  ctx.slots.inject('conversation.user.text.node', () => {
+    ctx.slots.register(
+      {
+        name: 'conversation.user.text.node',
+        key: FILE_NODE_ID,
+        priority: -20,
+        locale: LOCALE_NS,
+      },
+      FileRefChip,
+    )
+  })
 
   const withdrawServices = {
     sessions: () => safeGet('sessions'),
@@ -322,10 +383,7 @@ export function apply(ctx: ClientContext): void {
       watchFileLinks({
         sessionId: () => currentSessionId(safeGet('sessions')),
         cwd: () => cwdOfSession(safeGet('sessions'), currentSessionId(safeGet('sessions'))),
-        service: () =>
-          (injected.betterSidebar as BetterSidebarLike | undefined) ??
-          (safeGet('betterSidebar') as BetterSidebarLike | undefined) ??
-          null,
+        service: sidebarService,
         hint: showFileHint,
       }),
     'select-quote-with-edit: file links',

@@ -7,6 +7,8 @@ import { pickDelegate } from './host-node.ts'
 import { normalizeLoader, type ImageLoader } from './attachment-loader.ts'
 import { registerMessage, type ImageRef } from './registry.ts'
 import { ensureHostButtons } from './chrome.ts'
+import { FileRefChip } from './file-chips.tsx'
+import { mentionsInText } from './file-mention.ts'
 import { runtime } from './runtime.ts'
 import type { UserMessageProps } from './context.d.ts'
 import { ensureStyles } from './styles.ts'
@@ -155,6 +157,51 @@ function Attachments(props: {
 }
 
 /**
+ * Plain text of a bubble, with dragged file / folder mentions raised to chips.
+ *
+ * The message keeps them as text (`@/abs/file`, folders with a trailing slash)
+ * so the model reads a path; the bubble draws the same chip the composer showed
+ * — files clickable, folders tinted and inert.
+ */
+function bubbleTextNodes(text: string, keyPrefix: string): React.ReactNode[] {
+  const mentions = mentionsInText(text)
+  if (mentions.length === 0) {
+    return [
+      <span key={keyPrefix} className="dsqe-bubbleText">
+        {text}
+      </span>,
+    ]
+  }
+  const out: React.ReactNode[] = []
+  let cursor = 0
+  for (const mention of mentions) {
+    if (mention.start > cursor) {
+      out.push(
+        <span key={`${keyPrefix}-t${cursor}`} className="dsqe-bubbleText">
+          {text.slice(cursor, mention.start)}
+        </span>,
+      )
+    }
+    out.push(
+      <FileRefChip
+        key={`${keyPrefix}-f${mention.start}`}
+        node={{ data: { path: mention.path, directory: mention.directory } }}
+        raw={text.slice(mention.start, mention.end)}
+      />,
+    )
+    cursor = mention.end
+  }
+  if (cursor < text.length) {
+    out.push(
+      <span key={`${keyPrefix}-t${cursor}`} className="dsqe-bubbleText">
+        {text.slice(cursor)}
+      </span>,
+    )
+  }
+  return out
+}
+
+/**
  * The bubble body, chip by chip where the user typed them.
  *
  * Quotes composed by 0.7.2+ carry `at` (their offset in the message's own
@@ -185,11 +232,7 @@ function bubbleContent(
   if (placed.length === 0) {
     return [
       ...quotes.map((quote, index) => chip(quote, index)),
-      text ? (
-        <span key="text" className="dsqe-bubbleText">
-          {text}
-        </span>
-      ) : null,
+      ...(text ? bubbleTextNodes(text, 'text') : []),
     ]
   }
   const nodes: React.ReactNode[] = []
@@ -197,21 +240,13 @@ function bubbleContent(
   for (const entry of placed) {
     const at = Math.max(cursor, Math.min(text.length, entry.at))
     if (at > cursor) {
-      nodes.push(
-        <span key={`t-${cursor}`} className="dsqe-bubbleText">
-          {text.slice(cursor, at)}
-        </span>,
-      )
+      nodes.push(...bubbleTextNodes(text.slice(cursor, at), `t-${cursor}`))
     }
     nodes.push(chip(entry.quote, entry.index))
     cursor = at
   }
   if (cursor < text.length) {
-    nodes.push(
-      <span key={`t-${cursor}`} className="dsqe-bubbleText">
-        {text.slice(cursor)}
-      </span>,
-    )
+    nodes.push(...bubbleTextNodes(text.slice(cursor), `t-${cursor}`))
   }
   return nodes
 }

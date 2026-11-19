@@ -1645,6 +1645,152 @@ check(
   )
 }
 
+// ---------------------------------------------------------------- dropped file chips
+{
+  const mention = await compileModule(
+    'src/client/file-mention.ts',
+    join(mkdtempSync(join(tmpdir(), 'dsqe-fm-')), 'file-mention.cjs'),
+  )
+
+  check(
+    'file chips: normalizePath keeps absolute paths and strips the trailing slash',
+    mention.normalizePath('/Users/a/b.js/') === '/Users/a/b.js' &&
+      mention.normalizePath('  /Users/a/b.js  ') === '/Users/a/b.js',
+  )
+  check(
+    'file chips: relative paths are refused',
+    mention.normalizePath('src/a.ts') === null && mention.normalizePath('~/a.ts') === null,
+  )
+  check(
+    'file chips: windows backslashes normalise to forward slashes',
+    mention.normalizePath('C:\\work\\a.ts') === 'C:/work/a.ts',
+  )
+  check(
+    'file chips: the directory rides in a trailing slash',
+    mention.mentionText('/Users/a/b.js', false) === '@/Users/a/b.js' &&
+      mention.mentionText('/Users/a/dir', true) === '@/Users/a/dir/',
+  )
+  check(
+    'file chips: a path with spaces uses the quoted form',
+    mention.mentionText('/Users/a/my docs/x.md', false) === '@"/Users/a/my docs/x.md"',
+  )
+  check(
+    'file chips: chip label is the basename (folders keep the slash)',
+    mention.displayName('/Users/a/b/app.ts', false) === 'app.ts' &&
+      mention.displayName('/Users/a/b/src', true) === 'src/',
+  )
+  check(
+    'file chips: mention text round-trips through the parser',
+    JSON.stringify(mention.parseMentionText('@/Users/a/dir/')) ===
+      JSON.stringify({ path: '/Users/a/dir', directory: true }) &&
+      JSON.stringify(mention.parseMentionText('@"/Users/a/my docs/x.md"')) ===
+        JSON.stringify({ path: '/Users/a/my docs/x.md', directory: false }),
+  )
+
+  const mixed = '看这个 @/Users/a/src/app.ts ，还有 @/Users/a/dir/ 以及 @"/Users/a/my docs/x.md"'
+  const found = mention.mentionsInText(mixed)
+  check(
+    'file chips: mentions are found in order, with the directory flag',
+    found.length === 3 &&
+      found[0].path === '/Users/a/src/app.ts' &&
+      found[0].directory === false &&
+      found[1].path === '/Users/a/dir' &&
+      found[1].directory === true &&
+      found[2].path === '/Users/a/my docs/x.md',
+    JSON.stringify(found),
+  )
+  check(
+    'file chips: CJK punctuation ends the path',
+    !found[0].path.endsWith('，') && found[1].start > found[0].end,
+  )
+  check(
+    'file chips: an email-like a@/x/y is not a mention',
+    mention.mentionsInText('mail a@/Users/a/b.ts please').length === 0,
+  )
+  check(
+    'file chips: a single segment is not a mention',
+    mention.parseMentionAt('@/tmp', 0) === null,
+  )
+  check(
+    'file chips: uri-list falls back to the first file entry',
+    mention.pathFromUriList('# note\nfile:///Users/a/my%20docs/x.md\n') === '/Users/a/my docs/x.md' &&
+      mention.pathFromUriList('file:///C:/work/a.ts') === 'C:/work/a.ts',
+  )
+  check(
+    'file chips: the rule runs before the host session rule',
+    mention.fileMentionRule.order < 10 && mention.fileMentionRule.id === 'dsqe-file',
+  )
+
+  const chipsModule = await compileModule(
+    'src/client/file-chips.tsx',
+    join(mkdtempSync(join(tmpdir(), 'dsqe-fc-')), 'file-chips.cjs'),
+  )
+  const entries = slotOf('conversation.user.text.node')
+  check(
+    'file chips: transcript node registered at priority -20 for dsqe-file',
+    entries.length === 1 &&
+      entries[0].def.key === 'dsqe-file' &&
+      entries[0].def.priority === -20,
+    JSON.stringify(entries.map((entry) => entry.def)),
+  )
+  const rules = []
+  chipsModule.registerFileMentionRule({
+    userText: {
+      register: (rule) => {
+        rules.push(rule)
+        return () => {}
+      },
+    },
+  })
+  check(
+    'file chips: the user-text rule is handed to uiConversation.userText',
+    rules.length === 1 && rules[0].id === 'dsqe-file',
+  )
+
+  const realBridge = globalThis.__DSH_HOST_PATHS__
+  globalThis.__DSH_HOST_PATHS__ = { pathFor: (file) => file?.__path ?? '' }
+  const fakeFile = (path, type) => ({ type, __path: path })
+  const fakeItem = (file, isDirectory) => ({
+    kind: 'file',
+    getAsFile: () => file,
+    webkitGetAsEntry: () => ({ isDirectory }),
+  })
+  const fakeData = (items, uri = '') => ({
+    items,
+    files: items.map((item) => item.getAsFile()),
+    getData: () => uri,
+  })
+  check(
+    'file chips: a dropped file keeps its host path',
+    JSON.stringify(
+      chipsModule.collectDropped(fakeData([fakeItem(fakeFile('/U/a/b.js', 'text/javascript'), false)])),
+    ) === JSON.stringify([{ path: '/U/a/b.js', directory: false }]),
+  )
+  check(
+    'file chips: a dropped folder is flagged as a directory',
+    JSON.stringify(
+      chipsModule.collectDropped(fakeData([fakeItem(fakeFile('/U/a/src', ''), true)])),
+    ) === JSON.stringify([{ path: '/U/a/src', directory: true }]),
+  )
+  check(
+    'file chips: images stay with the host upload path',
+    chipsModule.collectDropped(fakeData([fakeItem(fakeFile('/U/a/p.png', 'image/png'), false)]))
+      .length === 0,
+  )
+  check(
+    'file chips: a file without a host path is not chipped',
+    chipsModule.collectDropped(fakeData([fakeItem(fakeFile('', 'text/plain'), false)])).length === 0,
+  )
+  check(
+    'file chips: without items the uri-list supplies the path',
+    JSON.stringify(
+      chipsModule.collectDropped(fakeData([], 'file:///U/a/b.js')),
+    ) === JSON.stringify([{ path: '/U/a/b.js', directory: false }]),
+  )
+  if (realBridge === undefined) delete globalThis.__DSH_HOST_PATHS__
+  else globalThis.__DSH_HOST_PATHS__ = realBridge
+}
+
 // ---------------------------------------------------------------- host half
 {
   const host = await import(pathToFileURL(resolve(root, 'lib/index.js')).href)

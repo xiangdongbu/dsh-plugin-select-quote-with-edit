@@ -61,3 +61,32 @@ export function XIcon(_props: IconProps): React.ReactNode {
     </svg>
   )
 }
+
+/** 文件图标：带折角的纸片（拖入的文件胶囊）。 */
+export function FileIcon(_props: IconProps): React.ReactNode {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M4.2 2.6h4.4l3.2 3.2v7.6H4.2z"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path d="M8.6 2.6v3.2h3.2" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+/** 文件夹图标：带翻盖的文件夹（拖入的目录胶囊）。 */
+export function FolderIcon(_props: IconProps): React.ReactNode {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M2.2 4.4c0-.6.5-1.1 1.1-1.1h2.5l1.3 1.5h5.6c.6 0 1.1.5 1.1 1.1v5.7c0 .6-.5 1.1-1.1 1.1H3.3c-.6 0-1.1-.5-1.1-1.1z"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}

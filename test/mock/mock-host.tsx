@@ -44,6 +44,9 @@ const SEEDED_USER_WIRE = [
   '</dsh-quotes>',
   '',
   '1233',
+  '',
+  // 拖入的文件 / 文件夹（0.7.30）：正文里是 `@绝对路径`，气泡里应画成胶囊。
+  '@"/mock/project/app/utils/offlinePack.ts" @/mock/project/docs/',
 ].join('\n')
 // 10月30日 23:29（今年），对齐参考 UI 里的时间样式
 const SEEDED_TIME = (() => {

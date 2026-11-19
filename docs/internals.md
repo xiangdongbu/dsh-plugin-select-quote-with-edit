@@ -185,6 +185,30 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 ② `betterSidebar` 是**别的插件**提供的服务，必须走 `ctx.inject(['betterSidebar'], …)` 可选子作用域（同
 `uiConversation` 的门控问题），拿不到就只弹提示、不改文字。
 
+### 拖入的文件 / 文件夹（0.7.30，file-chips.tsx + file-mention.ts）
+
+宿主本来就会处理拖放（`ui-conversation` 的 `addFiles`：有真实路径的非图片文件 → `@路径` chip），但它的引用源
+在部分 profile 里退化成一串纯文本，路径也就跟着裸着进输入框。这里自己接一遍，**三处共用一套线格式**：
+
+- **线格式**（`file-mention.ts`，纯函数、可单测）：文件 `@/abs/file.ts`，文件夹 `@/abs/dir/`（尾斜杠即目录标记），
+  含空格改写成 `@"/abs/a b.ts"`。解析规则 `fileMentionRule.order = 5`，比宿主的 `session`(10)、`file`(30) 都小，
+  同起点时优先；并且要求 `@` 前不是单词字符、路径至少两段，`a@/x/y` 这类邮箱不会被误认。
+- **输入框**（`watchFileDrops`）：`document` **捕获阶段**拦 `drop`，只在落点位于 `[data-lexical-editor="true"]`
+  （或它的矩形）内、且确实拿到了本机路径时才 `preventDefault + stopImmediatePropagation`。宿主的 drop 监听是
+  **冒泡阶段**（`document.addEventListener('drop', onDrop)`），所以捕获先手；Lexical 自己的 drop 处理不认
+  `defaultPrevented`，必须连事件一起掐掉（与 paste.ts 同一个理由）。路径来源：桌面端
+  `globalThis.__DSH_HOST_PATHS__.pathFor(file)`（预加载里就是 Electron 的 `webUtils.getPathForFile`），没有 items
+  明细时退回 `text/uri-list`。**图片与拿不到路径的一律放过**，仍归宿主的附件上传。
+- **胶囊**：插入宿主自己的 `reference-chip` 行内节点（`insertReferenceChip`，与 quote 胶囊同一套 `placeChip`），
+  来源名 `dsh-file`，ref 就是上面的线格式；`registerFileSource` 给它一个 codec（`clipboardText`/`serialize`
+  都原样返回 ref，于是发送时留在消息里的是 `@/绝对路径`）和 `openReference` 点击路由（→ betterSidebar.openFile）。
+  文件夹的 `appearance` 是 `folder`，卡片里显示完整路径。
+- **正文**：`ctx.uiConversation.userText.register(fileMentionRule)` + 在 `conversation.user.text.node` 上以
+  `key: 'dsqe-file'`、`priority: -20` 注册渲染器，把消息里的 `@/绝对路径` 重新画成同款胶囊：文件蓝色可点
+  （`role="link"` + Enter/Space），文件夹琥珀色不可点。插件自绘的引用气泡里也走同一段切分（`bubbleTextNodes`）。
+- **退化顺序**：拿不到路径 → 不拦拖放；插不进胶囊 → 插路径文本 + 轻提示；`uiConversation.userText` 拿不到 →
+  发送后显示 `@/路径` 纯文本。任何一步失败都不会吞内容。
+
 ## 第三方插件依赖
 
 本插件调用另外两个插件的能力，一个必需、一个可选。**只有 `dsh-rewind-plugin` 写进了 `dependencies`**；`dsh-better-sidebar` 刻意不写（见下）。
@@ -253,4 +277,5 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
 | 编辑/撤回按钮时有时无，重启也不稳定 | 先跑 `npm run doctor`。九成是**已安装副本被插件管理器按锁文件回滚**了：`~/.dsh/profiles/<profile>/pnpm-lock.yaml` 钉着旧 commit，装/卸任何插件都会重跑 install 把 `node_modules/<包名>` 换回那个版本（`doctor` 会显示「已安装版本 ≠ 仓库版本」或「锁文件提交 ≠ 本地 HEAD」）。修法：把 profile 依赖改成 `github:<owner>/<repo>#<本地HEAD>`（或 `link:` 到工作副本），再 `npm run sync:desktop` |
 | 正文里的文件路径点了没反应 / 不该有下划线的地方有 | 先看 `betterSidebar` 是否拿到（`ctx.inject(['betterSidebar'], …)`；未装 `dsh-better-sidebar` 只会弹提示）；再确认命中的是不是**路径**：`file-links.ts` 只认「已知扩展名 + 两侧边界」，URL / 域名 / `a/b` 会被跳过，流式输出中的消息要等静默 700ms 才会被扫到（`[data-streaming]` 子树直接跳过）。相对路径按会话 cwd 解析，cwd 缺失时原样交给宿主 |
 | 回应正文里的表格样式被压坏 / 撑出正文列 | 目标形态是「表格样式原样 + 滚动区域 = 正文列宽」：`wide-tables.ts` **只**把包装层 `.md-table-wide` 钉成实测正文列宽并给 `overflow-x: auto`，表格保持 `width: max-content`（列宽按内容分配、单元格沿用宿主 `max-width: min(30vw,320px)` 上限），所以看起来还是原来那张表，放不下就在边界内横向滚。别再把表格压成正文列宽（那会把每列挤成几个字符），也别去掉单元格上限（自然宽度会飙到 2000px+）。两个坑：① wrapper 一旦成为滚动容器，`table.getBoundingClientRect().left` 会跟着 scrollLeft 变——溢出时**不能**再做 margin-left 几何对齐，否则和用户滚动打架；② 宿主的宽表格包装层会跑出父级（实测 1512 > 748），纯 CSS 百分比收不住，必须写像素 |
+| 拖进输入框的文件变成一行裸路径、没有胶囊 | 说明我们的 `drop` 拦截没生效或插入失败。三个断点：① `globalThis.__DSH_HOST_PATHS__` 是否存在（只有桌面端预加载有）；② 落点是否在 `[data-lexical-editor="true"]` 里（我们只接管输入框）；③ `editor._nodes.get('reference-chip')` 是否有类（宿主节点类型被改名时插入会返回 false，此时会插入路径文本 + 提示「插入胶囊失败」） |
 | 发出去的消息图片不见了（会话日志里明明有 image 块） | 图片只在渲染层丢，发/收都没问题。两条链要分开看：① 宿主视图被我们委托时，`loadImage` 必须归一成 Promise（`attachment-loader.ts`）——返回字符串/`undefined` 会让宿主 `MessageImage` 抛错，而抛错的槽位条目被 `abdicate` **永久摘除**，该会话之后所有用户图片都没了（重启才回来）；② `pickDelegate` 读空时要退回「上次认出的宿主视图」，否则兜底气泡接管这一行；兜底气泡 0.7.29 起也会画图片。排查顺序：`session.v4.jsonl.zstd` 里确认 image 块在 → 看该行有没有 `data-dsqe-user` + 宿主 `[data-message-attachments]` → 有兜底 `dsqe-fallbackRow` 就是委托失败 |

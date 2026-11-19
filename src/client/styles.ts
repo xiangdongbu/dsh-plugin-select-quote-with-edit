@@ -934,6 +934,67 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
   opacity: 0.72;
 }
 
+/* ---------- 拖入的文件 / 文件夹胶囊（正文） ----------
+   文件：蓝色调、可点（悬停下划线）；文件夹：琥珀色、不可点（cursor 保持
+   默认）。两种都只做背景/描边染色，文字颜色继承正文，暗色主题下同样可读。 */
+.dsqe_fileChip,
+.dsqe_dirChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 32em;
+  padding: 0 8px 0 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 0.94em;
+  line-height: 1.65;
+  vertical-align: baseline;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.dsqe_fileChipIcon {
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  opacity: 0.9;
+}
+.dsqe_fileChipIcon svg {
+  width: 100%;
+  height: 100%;
+}
+.dsqe_fileChipName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dsqe_fileChip {
+  color: inherit;
+  cursor: pointer;
+  background: color-mix(in srgb, #4f8cff 16%, transparent);
+  border-color: color-mix(in srgb, #4f8cff 45%, transparent);
+}
+.dsqe_fileChip:hover .dsqe_fileChipName {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.dsqe_fileChip:active {
+  opacity: 0.72;
+}
+.dsqe_fileChip:focus-visible {
+  outline: 2px solid color-mix(in srgb, #4f8cff 70%, transparent);
+  outline-offset: 1px;
+}
+.dsqe_dirChip {
+  color: inherit;
+  cursor: default;
+  background: color-mix(in srgb, #e0a13a 15%, transparent);
+  border-color: color-mix(in srgb, #e0a13a 45%, transparent);
+}
+.dsqe_fileChipRaw {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* ---------- 左侧会话行尾：只留「…」菜单，隐藏快捷按钮 ---------- */
 /* 宿主会话行的行尾容器是 rowActions（CSS module 类名形如 hash_rowActions），
    里面第一个子节点是「…」菜单按钮（Menu 的 anchor），后面才是挂在
