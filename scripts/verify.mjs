@@ -1789,6 +1789,92 @@ check(
   )
   if (realBridge === undefined) delete globalThis.__DSH_HOST_PATHS__
   else globalThis.__DSH_HOST_PATHS__ = realBridge
+
+  // 拦下宿主的 drop 之后，必须补发一颗「空 drop」让它把「拖动到此处即可添加」
+  // 的遮罩收掉：宿主只在它自己的 document drop 里 reset()，外部拖入没有 dragend。
+  const realDocument = globalThis.document
+  const realElement = globalThis.Element
+  const realHTMLElement = globalThis.HTMLElement
+  const listeners = []
+  const dispatched = []
+  class FakeElement {
+    closest() {
+      return this
+    }
+  }
+  globalThis.Element = FakeElement
+  globalThis.HTMLElement = FakeElement
+  globalThis.document = {
+    addEventListener: (type, fn) => listeners.push({ type, fn }),
+    removeEventListener: () => {},
+    dispatchEvent: (event) => {
+      dispatched.push(event)
+      // 真实派发时 document 上的捕获监听也会先收到这颗合成事件。
+      for (const entry of listeners) entry.fn(event)
+      return true
+    },
+    querySelector: () => null,
+    execCommand: () => false,
+  }
+  globalThis.__DSH_HOST_PATHS__ = { pathFor: (file) => file?.__path ?? '' }
+
+  const hinted = []
+  const stopDrops = chipsModule.watchFileDrops({ openFile: () => true, hint: (text) => hinted.push(text) })
+  const dropEvent = (target, items) => {
+    const flags = { prevented: false, stopped: false, immediate: false }
+    return {
+      flags,
+      defaultPrevented: false,
+      dataTransfer: fakeData(items),
+      target,
+      clientX: 10,
+      clientY: 10,
+      preventDefault() {
+        flags.prevented = true
+      },
+      stopPropagation() {
+        flags.stopped = true
+      },
+      stopImmediatePropagation() {
+        flags.immediate = true
+      },
+    }
+  }
+
+  const inside = new FakeElement()
+  const realDrop = dropEvent(inside, [fakeItem(fakeFile('/U/a/b.js', 'text/javascript'), false)])
+  for (const entry of listeners) entry.fn(realDrop)
+
+  check(
+    'file chips: the captured drop is consumed (host must not insert a second time)',
+    realDrop.flags.prevented && realDrop.flags.stopped && realDrop.flags.immediate,
+  )
+  check(
+    'file chips: a synthetic empty drop is emitted so the host clears its drag overlay',
+    dispatched.length === 1 &&
+      dispatched[0].type === 'drop' &&
+      dispatched[0].dataTransfer.types.includes('Files') &&
+      dispatched[0].dataTransfer.files.length === 0,
+    JSON.stringify(dispatched.map((event) => event.type)),
+  )
+  check(
+    'file chips: the synthetic drop is never re-processed by our own watcher',
+    dispatched[0].defaultPrevented === false && hinted.length === 1,
+    `hinted=${hinted.length}`,
+  )
+
+  dispatched.length = 0
+  const outside = dropEvent({ notAnElement: true }, [fakeItem(fakeFile('/U/a/b.js', 'text'), false)])
+  for (const entry of listeners) entry.fn(outside)
+  check(
+    'file chips: a drop outside the composer is left to the host',
+    dispatched.length === 0 && outside.flags.prevented === false,
+  )
+
+  stopDrops()
+  globalThis.document = realDocument
+  globalThis.Element = realElement
+  globalThis.HTMLElement = realHTMLElement
 }
 
 // ---------------------------------------------------------------- host half

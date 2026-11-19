@@ -289,12 +289,54 @@ function insertPlainText(text: string): void {
   }
 }
 
+/** 正在派发我们自己补发的合成 drop（宿主用它收遮罩）。 */
+let releasing = false
+
+/**
+ * 让宿主把「拖放中」的遮罩收起来。
+ *
+ * 宿主装的是 `installDocumentDropEvents`：`dragenter` 累加 `dragDepth` 并
+ * `setDragActive(true)`，而**只有** `drop`（`reset()`）和窗口级的 `dragend`
+ * 会把它清零。从访达这类外部来源拖进来的 drag 不会有 `dragend`，所以
+ * `drop` 是唯一的收口点 —— 我们在捕获阶段掐掉真实 `drop` 之后，遮罩就会
+ * 永久停在「拖动到此处即可添加」上。
+ *
+ * 这里补发一个「类型是 Files、但一个文件都没有」的合成 drop：
+ * 能过宿主 `fileTransfer()` 的判定（它只看 `dataTransfer.types`）→ `reset()`
+ * 执行、遮罩消失；`files` 为空 → 宿主的 `onAddFiles` 不会被调用，不会重复插入。
+ */
+function releaseHostDropOverlay(): void {
+  const Ctor: typeof Event | undefined =
+    typeof DragEvent === 'function' ? (DragEvent as unknown as typeof Event) : globalThis.Event
+  if (typeof Ctor !== 'function') return
+  let event: Event
+  try {
+    event = new Ctor('drop', { bubbles: true, cancelable: true })
+  } catch {
+    return
+  }
+  try {
+    Object.defineProperty(event, 'dataTransfer', {
+      value: { types: ['Files'], files: [], items: [], getData: () => '' },
+    })
+  } catch {
+    return
+  }
+  releasing = true
+  try {
+    document.dispatchEvent(event)
+  } finally {
+    releasing = false
+  }
+}
+
 /**
  * document 捕获阶段接管拖入：只在落点位于输入框、且确实拿到了本机路径时
  * 才阻止宿主的默认处理。图片、网页端的外部文件一律不拦。
  */
 export function watchFileDrops(deps: FileChipDeps): () => void {
   const onDrop = (event: DragEvent): void => {
+    if (releasing) return
     if (event.defaultPrevented) return
     const data = event.dataTransfer
     if (data === null) return
@@ -307,24 +349,30 @@ export function watchFileDrops(deps: FileChipDeps): () => void {
     event.stopPropagation()
     event.stopImmediatePropagation()
 
-    let placed = 0
-    const fallback: string[] = []
-    for (const item of items) {
-      const mention = mentionText(item.path, item.directory)
-      const ok = insertReferenceChip({
-        source: FILE_SOURCE,
-        ref: mention,
-        // 文件夹直接显示路径（不可点），文件显示文件名（悬停看全路径）。
-        label: item.directory ? `${item.path}/` : displayName(item.path, item.directory),
-        appearance: item.directory ? 'folder' : 'file',
-        clipboardText: mention,
-      })
-      if (ok) placed += 1
-      else fallback.push(mention)
-    }
-    if (placed === 0) {
-      deps.hint(t('filechip.insertFailed'))
-      insertPlainText(fallback.join(' '))
+    try {
+      let placed = 0
+      const fallback: string[] = []
+      for (const item of items) {
+        const mention = mentionText(item.path, item.directory)
+        const ok = insertReferenceChip({
+          source: FILE_SOURCE,
+          ref: mention,
+          // 文件夹直接显示路径（不可点），文件显示文件名（悬停看全路径）。
+          label: item.directory ? `${item.path}/` : displayName(item.path, item.directory),
+          appearance: item.directory ? 'folder' : 'file',
+          clipboardText: mention,
+        })
+        if (ok) placed += 1
+        else fallback.push(mention)
+      }
+      if (placed === 0) {
+        deps.hint(t('filechip.insertFailed'))
+        insertPlainText(fallback.join(' '))
+      }
+    } finally {
+      // 无论插入成功与否，都要把宿主那张「拖动到此处即可添加」的遮罩收掉：
+      // 它是被我们截断的那次 drop 才会清的状态。
+      releaseHostDropOverlay()
     }
   }
   document.addEventListener('drop', onDrop, true)

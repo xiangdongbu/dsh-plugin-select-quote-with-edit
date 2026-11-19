@@ -96,6 +96,7 @@
 - **发送后仍是胶囊**：消息里留的是文本 `@/绝对路径`（目录带尾斜杠），正文渲染规则把它重新画成同样的胶囊；所以模型读到的是朴素路径，人看到的是胶囊
 - **只拦输入框里的拖放**：落点不在输入框、拖进来的是图片（仍走宿主附件上传）、或拿不到本机真实路径（网页端的外部文件）时，一律不插手，交回宿主
 - **拿不到路径就退化成文本**：胶囊插不进去（宿主节点缺失等）时插入路径文本并轻提示，不会丢内容
+- **拖放后宿主那张「拖动到此处即可添加」的遮罩会自己收掉**：我们截断了真实 `drop`（否则 Lexical 会再插一遍），所以补发一颗空 drop 让宿主执行自己的 `reset()`
 
 三种交互都依赖桌面端预加载的 `__DSH_HOST_PATHS__.pathFor`（Electron `webUtils.getPathForFile`）；网页端退回 `text/uri-list`，再拿不到就不拦。
 
@@ -196,7 +197,7 @@ dsh web --patch "$PWD/dev.patch.yml"
 ## 本地验证
 
 ```bash
-npm run check        # typecheck + build + 191 项无头校验
+npm run check        # typecheck + build + 195 项无头校验
 npm run doctor       # 体检：仓库构建 / 已安装副本 / profile 依赖锁定 三者是否一致
 npm run mock         # mock 宿主 + http://127.0.0.1:4173/test/mock/app.html
 ```
