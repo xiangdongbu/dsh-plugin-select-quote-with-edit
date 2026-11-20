@@ -26,6 +26,19 @@ export const FILE_NODE_ID = 'dsqe-file'
 /** 把这些字符当作路径的终点：空白、引号、常见的中英文标点。 */
 const STOP_RE = /[\s"'<>()[\]{}，。、；：？！「」『』（）]/u
 
+/**
+ * 中日韩字符。
+ *
+ * 路径本身可以含中文（`/Users/bu/Downloads/109沪金今日涨幅-SSE.json`），所以
+ * 不能一见到 CJK 就截断；但用户经常紧贴着写文案（`…-SSE.json今天几号`），
+ * 于是补一条：**路径已经以 `扩展名` 收尾之后**再遇到 CJK，就当作文案的开始。
+ * 这样 `…/109沪金…json` 里的中文照旧是路径，而 `.json今天几号` 的「今天几号」不会
+ * 被吞进胶囊。
+ */
+const CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/u
+/** 已经形成「文件名.扩展名」的结尾。 */
+const EXT_TAIL_RE = /\.[A-Za-z0-9]{1,8}$/u
+
 /** 路径里出现控制字符或引号就不当引用（宿主自己也是这么判的）。 */
 const FORBIDDEN_RE = /[\u0000-\u001f\u007f-\u009f"]/u
 
@@ -123,6 +136,9 @@ export function parseMentionAt(text: string, at: number): ParsedMention | null {
     if (quoted) {
       if (char === '"') break
     } else if (STOP_RE.test(char)) {
+      break
+    } else if (CJK_RE.test(char) && EXT_TAIL_RE.test(text.slice(start, cursor))) {
+      // `…/a.json今天几号`：扩展名之后的中文是文案，不是路径。
       break
     }
     cursor += 1

@@ -1708,6 +1708,15 @@ check(
     mention.mentionsInText('mail a@/Users/a/b.ts please').length === 0,
   )
   check(
+    'file chips: CJK right after an extension is prose, not path',
+    JSON.stringify(mention.mentionsInText('@/Users/a/109沪金今日涨幅-SSE.json今天几号')) ===
+      JSON.stringify([{ path: '/Users/a/109沪金今日涨幅-SSE.json', directory: false, start: 0, end: 28 }]),
+  )
+  check(
+    'file chips: CJK inside the path is kept',
+    mention.mentionsInText('@/Users/a/下载/文档.json')[0]?.path === '/Users/a/下载/文档.json',
+  )
+  check(
     'file chips: a single segment is not a mention',
     mention.parseMentionAt('@/tmp', 0) === null,
   )

@@ -785,7 +785,7 @@ function App(): React.ReactNode {
         // 这条消息必须由我们自己的气泡画胶囊。
         key: 'm-fileonly',
         role: 'user',
-        content: [{ type: 'text', text: '@/mock/project/app/utils/offlinePack.ts 这个文件干什么的' }],
+        content: [{ type: 'text', text: '@/mock/project/app/utils/offlinePack.ts这个文件干什么的' }],
         time: SEEDED_TIME,
         seq: 5,
       },
@@ -894,6 +894,12 @@ function App(): React.ReactNode {
         {messages.map((message) => (
           <MessageRow key={message.key} msg={message} />
         ))}
+        {/* 宿主自己渲染的用户行（不经过我们的节点视图）：DOM 装饰层必须把
+            这里的 `@/路径` 也贴成胶囊，否则真实环境里「谁渲染这一行」又成了
+            单点。data-chat-flow-kind 与宿主真实行属性一致。 */}
+        <div data-chat-flow-kind="user" data-testid="host-raw-user">
+          <div className="ds-bubble">@/mock/project/app/utils/offlinePack.ts这个文件干什么的</div>
+        </div>
         {echo !== null ? (
           <div className="ds-userRow" data-submission-echo="true">
             <div className="ds-bubble">{echo}</div>

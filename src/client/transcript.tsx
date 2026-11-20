@@ -7,7 +7,7 @@ import { pickDelegate } from './host-node.ts'
 import { normalizeLoader, type ImageLoader } from './attachment-loader.ts'
 import { registerMessage, type ImageRef } from './registry.ts'
 import { ensureHostButtons } from './chrome.ts'
-import { FileRefChip, isMentionRuleActive } from './file-chips.tsx'
+import { FileRefChip } from './file-chips.tsx'
 import { mentionsInText } from './file-mention.ts'
 import { runtime } from './runtime.ts'
 import type { UserMessageProps } from './context.d.ts'
@@ -358,7 +358,23 @@ export function UserMessageView(
     hostLoader === undefined ? rest : { ...rest, loadImage: hostLoader }
 
   let content: React.ReactNode
-  if (delegate !== undefined && delegate.kind === 'plugin') {
+  // 自带内容（引用块 / 拖入的文件路径）的行**永远**自己画，排在委托之前：
+  // 委托目标不可靠 —— `dsh-code-pill` 会遍历 `conversation.chat.node` 的条目
+  // 直接改写 `entry.component`（套一层包装器），我们读到的 `entries()` 里
+  // 既可能是被包过的宿主视图，也可能是被包过的自己；一旦判成「插件视图」就
+  // 整行交出去，胶囊和引用块一起消失。自己画没有中间环节。
+  if (scanned.quotes.length > 0 || mentionsInText(text).length > 0) {
+    content = (
+      <div className="dsqe-userRow">
+        <div className="dsqe-userStack" data-dsqe-quote-bubble="true">
+          <Attachments attachments={images} loadImage={rawLoader} />
+          <div className="dsqe-bubble">
+            <div className="dsqe-bubbleRow">{bubbleContent(text, scanned.quotes, true)}</div>
+          </div>
+        </div>
+      </div>
+    )
+  } else if (delegate !== undefined && delegate.kind === 'plugin') {
     const Delegate = delegate.component as
       | React.ComponentType<Record<string, unknown>>
       | undefined
@@ -371,17 +387,6 @@ export function UserMessageView(
           <div className="dsqe-fallbackBubble">{text}</div>
         </div>
       )
-  } else if (scanned.quotes.length > 0 || (mentionsInText(text).length > 0 && !isMentionRuleActive())) {
-    content = (
-      <div className="dsqe-userRow">
-        <div className="dsqe-userStack" data-dsqe-quote-bubble="true">
-          <Attachments attachments={images} loadImage={rawLoader} />
-          <div className="dsqe-bubble">
-            <div className="dsqe-bubbleRow">{bubbleContent(text, scanned.quotes, true)}</div>
-          </div>
-        </div>
-      </div>
-    )
   } else {
     const Host = delegate?.component as
       | React.ComponentType<Record<string, unknown>>

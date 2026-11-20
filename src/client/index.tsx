@@ -36,6 +36,7 @@ import {
   watchFileDrops,
 } from './file-chips.tsx'
 import { FILE_NODE_ID } from './file-mention.ts'
+import { watchMentionChips } from './mention-decorate.ts'
 import { watchQuotePaste } from './paste.ts'
 import { registerQuoteSource, watchChipDeletion } from './inline-chips.ts'
 import { watchChipClipboard } from './chip-clipboard.ts'
@@ -305,6 +306,13 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(
     () => watchFileDrops({ openFile: openPath, hint: showFileHint }),
     'select-quote-with-edit: file drops',
+  )
+
+  // 发送后的 `@/路径` 由 DOM 层贴胶囊：宿主那条「规则 + key 槽位」渲染链实测
+  // 会回落到原文，而 code-pill 还会改写 chat.node 的条目，所以不赌渲染链路。
+  ctx.effect(
+    () => watchMentionChips({ openFile: openPath, hint: showFileHint }),
+    'select-quote-with-edit: mention chips',
   )
 
   // 拖入后留在消息里的那段 `@/abs/path` 由这个正文节点渲染成同样的胶囊。
