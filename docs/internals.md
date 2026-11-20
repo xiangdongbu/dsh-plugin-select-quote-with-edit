@@ -234,6 +234,11 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
   2s 兜底巡检，把 `[data-dsqe-user]` / `[data-chat-flow-kind="user"]` 行里的 `@/路径` 文本直接
   换成胶囊元素（与 React 版同一批类名，点击走 `openFile`）。谁渲染这一行都无所谓，连历史消息
   也会一起补上。已处理的行打 `data-dsqe-decorated`，`[data-dsqe-filechip]` 内的变化不再触发。
+- **胶囊宽度**：`.dsqe_fileChip/.dsqe_dirChip` 的 `max-width` 必须是 `100%`（等于所在行的内容宽度）。
+  早先写的 `32em` 在窄气泡里仍会顶穿气泡圆角 —— 气泡 `max-width:76%`、固定 em 与之无关；再给
+  `.dsqe_fileChipName` 加 `min-width: 0`（flex 子项默认 `min-width:auto`，不给 0 就不会收缩，
+  `text-overflow: ellipsis` 也不生效）。mock 的 `?probe=1` 会输出每颗胶囊的
+  `overflowRight`（相对气泡右缘的像素，负数=在内部）与 `ellipsis`，用来回归这条。
 - **中文紧贴路径**：`parseMentionAt` 遇到 CJK 不会立刻截断（路径本身可以含中文），但**扩展名之后**
   再遇到 CJK 就当文案开始 —— `…-SSE.json今天几号` 的路径停在 `.json`，`…/109沪金…-SSE.json`
   里的中文照旧属于路径。

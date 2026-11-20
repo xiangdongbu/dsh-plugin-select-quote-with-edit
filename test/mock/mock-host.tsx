@@ -781,6 +781,19 @@ function App(): React.ReactNode {
         seq: 2,
       },
       {
+        // 超长文件名：胶囊必须在气泡宽度内收成省略号，不能顶穿气泡。
+        key: 'm-long',
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: '@/mock/reports/test-2025年7月4日竞价抢筹高开大于15且小于9的-SSE.json几号了',
+          },
+        ],
+        time: SEEDED_TIME,
+        seq: 6,
+      },
+      {
         // 只有文件引用、没有引用块：正文规则没挂上时（mock 里永远没挂上）
         // 这条消息必须由我们自己的气泡画胶囊。
         key: 'm-fileonly',
@@ -898,7 +911,9 @@ function App(): React.ReactNode {
             这里的 `@/路径` 也贴成胶囊，否则真实环境里「谁渲染这一行」又成了
             单点。data-chat-flow-kind 与宿主真实行属性一致。 */}
         <div data-chat-flow-kind="user" data-testid="host-raw-user">
-          <div className="ds-bubble">@/mock/project/app/utils/offlinePack.ts这个文件干什么的</div>
+          <div className="ds-bubble">
+            @/mock/project/reports/test-2025年7月4日竞价抢筹高开大于15且小于9的-SSE.json几号了
+          </div>
         </div>
         {echo !== null ? (
           <div className="ds-userRow" data-submission-echo="true">

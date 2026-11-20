@@ -942,7 +942,9 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  max-width: 32em;
+  /* 不能写死 em：气泡最大只有正文列的 76%，固定宽度会顶穿气泡。
+     100% 取的是所在行的内容宽度，超长文件名在这里收成省略号。 */
+  max-width: 100%;
   padding: 0 8px 0 6px;
   border-radius: 999px;
   border: 1px solid transparent;
@@ -951,6 +953,7 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
   vertical-align: baseline;
   white-space: nowrap;
   overflow: hidden;
+  box-sizing: border-box;
 }
 .dsqe_fileChipIcon {
   display: inline-flex;
@@ -964,6 +967,8 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
   height: 100%;
 }
 .dsqe_fileChipName {
+  /* flex 子项默认 min-width:auto，不给 0 就不会收缩，省略号也不会出现。 */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }

@@ -137,6 +137,22 @@
               .map(function (row) { return row.textContent || ''; })
               .join('\n')
               .match(/不存在的 home\.html/),
+            chips: Array.prototype.map.call(
+              document.querySelectorAll('[data-dsqe-filechip]'),
+              function (chip) {
+                var bubble = chip.closest('.dsqe-bubble') || chip.closest('[data-chat-flow-kind="user"]');
+                var name = chip.querySelector('.dsqe_fileChipName');
+                var cr = chip.getBoundingClientRect();
+                var br = bubble ? bubble.getBoundingClientRect() : null;
+                return {
+                  text: (name ? name.textContent : '').slice(0, 18),
+                  chipW: Math.round(cr.width),
+                  overflowRight: br ? Math.round(cr.right - br.right) : null,
+                  ellipsis: name ? name.scrollWidth > name.clientWidth + 1 : null,
+                  bubbleScrolls: bubble ? bubble.scrollWidth > bubble.clientWidth + 1 : null
+                };
+              }
+            ),
             tables: Array.prototype.map.call(
               document.querySelectorAll('.md-table-wide'),
               function (wrapper) {
