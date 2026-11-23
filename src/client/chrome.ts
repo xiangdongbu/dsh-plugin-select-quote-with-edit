@@ -21,6 +21,7 @@ import { chipLabel, composeMessage, scanQuotes, type Quote } from './protocol.ts
 import { runtime } from './runtime.ts'
 import { copyRich, escapeHtml } from './dom.ts'
 import { ensureStyles } from './styles.ts'
+import { concealComposedDraft } from './fold-mask.ts'
 import { SVG_PENCIL, SVG_COPY, SVG_CHECK, SVG_INFO, SVG_QUOTE, SVG_CLIP, SVG_X, SVG_UNDO } from './svg.ts'
 
 const FLOW_ITEM = '[data-chat-flow-key]'
@@ -742,6 +743,9 @@ function sendEdit(): void {
   // rewind-restore would otherwise read this block back out as a withdrawn
   // message and turn it into pending quotes, racing the send.
   runtime.markFolded?.()
+  // 这次写入之后要等 40ms 才提交，期间宿主一定会重画输入框 —— 先遮住，
+  // 别让整段 wire 文本（Quoted references + JSON）闪一下。见 fold-mask.ts。
+  concealComposedDraft()
   actions.setDraft(wire)
   // Submit through the resident composer's own send gesture once the draft
   // has landed. If another plugin (the quote plugin) unfolds the block back

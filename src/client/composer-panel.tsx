@@ -46,6 +46,7 @@ import {
 } from './protocol.ts'
 import { runtime } from './runtime.ts'
 import { ensureStyles } from './styles.ts'
+import { concealComposedDraft, revealComposedDraft } from './fold-mask.ts'
 
 export interface ComposerPanelProps {
   useInput?: <T>(selector: (state: { draft: string; draftRev: number }) => T) => T
@@ -100,6 +101,8 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
   const draftRef = useRef(draft)
   const actionsRef = useRef(inputActions)
   const foldingRef = useRef(false)
+  /** 折合后写进草稿的 wire 文本；非 null 表示遮罩生效中（见 fold-mask.ts）。 */
+  const foldingWireRef = useRef<string | null>(null)
   const composing = useComposing()
   // Inline chips are the goal; the row above the editor stays as the fallback
   // for hosts that do not register the reference-chip node.
@@ -116,6 +119,19 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
   const restoreRef = useRef<string[] | null>(null)
   draftRef.current = draft
   actionsRef.current = inputActions
+
+  // 折合写进去的 wire 草稿一旦被宿主清掉（正常发送）或被用户改写，立刻撤掉遮罩；
+  // 宿主既不清也不提交的情况交给 fold-mask 自带的上限时间。
+  useEffect(() => {
+    const wire = foldingWireRef.current
+    if (wire === null) return
+    if (draft === wire) return
+    foldingWireRef.current = null
+    revealComposedDraft()
+  }, [draft])
+
+  // 卸载时别把遮罩留在输入框上。
+  useEffect(() => () => revealComposedDraft(), [])
 
   const setDraftSafe = useCallback((text: string) => {
     actionsRef.current?.setDraft(text)
@@ -324,10 +340,14 @@ export function ComposerPanel(props: ComposerPanelProps): React.ReactNode {
           spots: spots === undefined ? null : [...spots],
         })
       }
-      actionsRef.current?.setDraft(composeMessage(draftRef.current, current, spots))
+      const wire = composeMessage(draftRef.current, current, spots)
+      // 先遮再写：宿主的 setDraft 会触发一次重渲染，绘制出来就是整段 JSON。
+      // 遮罩在宿主清空草稿（正常发送）或草稿被改写时撤掉，最多 1.2s。
+      foldingWireRef.current = wire
+      concealComposedDraft()
+      actionsRef.current?.setDraft(wire)
       clearQuotes()
     }
-
     const onKeyDown = (event: KeyboardEvent): void => {
       if (!isSubmitKey(event)) return
       const target = event.target

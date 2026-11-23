@@ -1025,6 +1025,14 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
 [data-dsqe-quote-echo] {
   visibility: hidden !important;
 }
+
+/* ---------- 发送顺手折草稿：把输入框遮住一瞬 ---------- */
+/* 发送手势里草稿会被换成 wire 文本（「Quoted references:」+ <dsh-quotes> 的 JSON），
+   宿主提交前会重画一次输入框。这里只在折合期间按可见性遮住编辑器（保留布局，
+   卡片高度不跳），宿主清空草稿或超时后立刻撤掉 —— 见 fold-mask.ts。 */
+[data-dsqe-folding] [data-lexical-editor="true"] {
+  visibility: hidden !important;
+}
 `
 
 const STYLE_ATTR = 'data-plugin-css'

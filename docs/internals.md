@@ -240,6 +240,13 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
     一定跨过一次绘制 —— 发送瞬间那一行（宿主的 `data-submission-echo` 回显）会先显示完整长路径
     再“跳”成胶囊。现在两条通道：同步快路径（只处理新增节点命中的那一到四行）+ 120ms 全量兜底。
     mock 的 `?syncprobe=1` 会在同一个微任务里断言胶囊已就位（旧的去抖实现这里必为 false）。
+- **发送时折草稿的遮罩**：宿主的发送入口只认草稿，所以插件只能在发送手势里先
+  `setDraft(wire)` 再让宿主自己提交；这两步之间宿主会重画输入框，画出来就是整段
+  `Quoted references:` + `<dsh-quotes>` JSON（截图里那一屏）。`fold-mask.ts` 在写草稿
+  **之前**给 `[data-composer-card]` 打 `data-dsqe-folding`，CSS 用 `visibility: hidden`
+  遮住编辑器（保留布局、卡片不跳）；宿主清空草稿（正常发送）或草稿被改写时立刻撤掉，
+  最多 1200ms 兜底。两条写 wire 的路径都要调：面板的 send-gesture 折合、`chrome.ts`
+  的 `sendEdit`（后者写完还要等 40ms 才提交，肯定会画一帧）。
 - **带引用的发送回显**：宿主在你按下发送后先画一行 `[data-submission-echo]`，内容是**原始 wire
   文本**——`Quoted references:` 头部 + `<dsh-quotes>` 里一整段 JSON。`echo-strip.ts` 会剥掉它，
   但协议块是多行的，宿主交给 markdown 渲染后会被拆成标题 / 段落 / 代码块几个节点，
