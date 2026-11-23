@@ -240,6 +240,14 @@ chip 内同时渲染 × 按钮与引用图标，占同一槽位（CSS 按 `data-
     一定跨过一次绘制 —— 发送瞬间那一行（宿主的 `data-submission-echo` 回显）会先显示完整长路径
     再“跳”成胶囊。现在两条通道：同步快路径（只处理新增节点命中的那一到四行）+ 120ms 全量兜底。
     mock 的 `?syncprobe=1` 会在同一个微任务里断言胶囊已就位（旧的去抖实现这里必为 false）。
+- **带引用的发送回显**：宿主在你按下发送后先画一行 `[data-submission-echo]`，内容是**原始 wire
+  文本**——`Quoted references:` 头部 + `<dsh-quotes>` 里一整段 JSON。`echo-strip.ts` 会剥掉它，
+  但协议块是多行的，宿主交给 markdown 渲染后会被拆成标题 / 段落 / 代码块几个节点，
+  “同一文本节点里找开闭标签”的剥法接不住（开标签在一段、闭标签在另一段）→ 漏出半截 JSON。
+  跨节点改写要动 React 拥有的结构，风险大；回显本来就是瞬态，所以改成**按可见性遮住**：
+  行上打 `data-dsqe-quote-echo`，CSS 用 `visibility: hidden`（保留高度，气泡接手时列表不跳），
+  等 `[data-dsqe-quote-bubble]` 出现、协议块消失或 900ms 超时再撤掉。排队区
+  （`[data-queue-dock]`）只剥文本不遮——那是列表预览，遮掉会让人以为消息丢了。
 - **胶囊宽度**：`.dsqe_fileChip/.dsqe_dirChip` 的 `max-width` 必须是 `100%`（等于所在行的内容宽度）。
   早先写的 `32em` 在窄气泡里仍会顶穿气泡圆角 —— 气泡 `max-width:76%`、固定 em 与之无关；再给
   `.dsqe_fileChipName` 加 `min-width: 0`（flex 子项默认 `min-width:auto`，不给 0 就不会收缩，

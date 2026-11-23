@@ -1015,6 +1015,16 @@ body[data-ds-dark-theme] .dsqe-echip { --dsqe-chip-border: rgba(255, 255, 255, 0
 .sd-rowaction-button {
   display: none !important;
 }
+
+/* ---------- 带引用的发送回显：先藏一帧，等我们的气泡接手 ---------- */
+/* 宿主在发送瞬间先画一行「提交回显」，内容是原始 wire 文本 —— 里面带着
+   <dsh-quotes> 协议块（一大段 JSON）和「Quoted references:」头部。协议块的
+   生命周期只在回显这一小会儿（echo-strip.ts 会先做文本剥离），但剥离跨不过
+   markdown 渲染切开的多行，仍可能漏出半截。这里直接按可见性遮住：
+   visibility 而非 display，保留布局高度，胶囊气泡接手时不会跳动。 */
+[data-dsqe-quote-echo] {
+  visibility: hidden !important;
+}
 `
 
 const STYLE_ATTR = 'data-plugin-css'
