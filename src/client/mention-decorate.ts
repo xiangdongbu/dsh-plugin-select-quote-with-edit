@@ -22,12 +22,29 @@ export interface MentionDecorateDeps {
   hint(text: string): void
 }
 
-/** 用户消息行：我们的标记、或宿主自己的行属性。 */
-const ROW_SELECTOR = '[data-dsqe-user="true"], [data-chat-flow-kind="user"]'
+/**
+ * 用户消息行：我们的标记、宿主自己的行属性，以及宿主的「提交回显」行。
+ *
+ * `[data-submission-echo]` 是发送瞬间宿主先插进来的那一行（还没等到服务端回显），
+ * 内容由宿主自己画，是长路径闪现的主要来源；它通常也带 `data-chat-flow-kind="user"`，
+ * 但排队区（QueueDock）里那份只带这一个属性，所以单列出来。
+ */
+const ROW_SELECTOR =
+  '[data-dsqe-user="true"], [data-chat-flow-kind="user"], [data-submission-echo]'
 
 /** 这些地方一律不碰：已经处理过的胶囊、代码、链接、编辑器。 */
 const SKIP_SELECTOR =
   'pre, code, a, textarea, input, script, style, [contenteditable="true"], [data-dsqe-filechip], [data-dsqe-decorated]'
+
+/**
+ * 同步首绘用的跳过集：**不含** `[data-dsqe-decorated]`。
+ *
+ * 同步那一遍要把行上旧的「已装饰」标记撤掉重画（宿主可能先插入空行、下一拍
+ * 才填文本），所以不能拿整份 SKIP_SELECTOR 去判 —— 否则行自身命中
+ * `[data-dsqe-decorated]`，永远判成“跳过区”。
+ */
+const SKIP_FOR_SYNC =
+  'pre, code, a, textarea, input, script, style, [contenteditable="true"], [data-dsqe-filechip]'
 
 const DECORATED = 'data-dsqe-decorated'
 
@@ -128,11 +145,58 @@ function decorateRow(row: Element, deps: MentionDecorateDeps): boolean {
 }
 
 /**
+ * 把「刚进 DOM 的那一小块」就地画成胶囊，**不经过去抖**。
+ *
+ * 目的只有一个：消掉发送瞬间的闪现。宿主把用户行插进流里是先一次 DOM 变更，
+ * 浏览器随后才绘制；`MutationObserver` 的回调跑在微任务检查点、绘制之前，
+ * 所以在这里换掉文本，用户根本看不到原文那一帧。原来那 120ms 的 `setTimeout`
+ * 一定跨过至少一次绘制 —— 长路径（`@/Users/.../很长的文件名.ts`）就闪一下。
+ *
+ * 只处理新增节点命中的那一行（或新增子树里的前几行），不做全量遍历：流式输出
+ * 时每批变更都会走到这里，全量扫会把收益吃掉。
+ *
+ * @returns 是否真的改写了 DOM。
+ */
+function decorateFresh(node: Node, deps: MentionDecorateDeps): boolean {
+  if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.TEXT_NODE) return false
+  const element =
+    node.nodeType === Node.ELEMENT_NODE ? (node as Element) : (node as Text).parentElement
+  if (element === null) return false
+  // 我们自己画出来的胶囊、代码块、编辑器里一律不碰（含行内已有的胶囊）。
+  if (element.closest(SKIP_FOR_SYNC) !== null) return false
+
+  const rows: Element[] = []
+  const own = element.closest(ROW_SELECTOR)
+  if (own !== null) {
+    rows.push(own)
+  } else if (node.nodeType === Node.ELEMENT_NODE) {
+    // 整块 flow 一起插入的场景（切会话、首屏渲染）：只取前几行，避免长会话首帧全扫。
+    for (const row of Array.from((node as Element).querySelectorAll(ROW_SELECTOR))) {
+      if (rows.length >= 4) break
+      rows.push(row)
+    }
+  }
+
+  let touched = false
+  for (const row of rows) {
+    // 宿主可能先把空行插进来、下一拍才填文本：撤掉旧标记，让这一遍重画。
+    row.removeAttribute(DECORATED)
+    if (decorateRow(row, deps)) touched = true
+  }
+  return touched
+}
+
+/**
  * 开始把用户消息里的 `@/路径` 画成胶囊。
  *
- * 用 `MutationObserver` 跟着新消息 / 切换会话走；`setTimeout` 去抖（宿主在
- * 窗口不可见时会暂停 rAF，见宽表格那段的教训）。已处理的行打上
- * `data-dsqe-decorated`，我们自己的改动不会引起自我循环。
+ * 两条通道：
+ * - **同步**：`MutationObserver` 回调里对新插入的节点立刻装饰，赶在本帧绘制之前
+ *   （见 `decorateFresh`）；
+ * - **去抖兜底**：`setTimeout` 120ms 的全量巡检，覆盖同步那遍够不着的场景
+ *   （属性变化、CSS 引起的重排、别的插件事后改写文本）。宿主在窗口不可见时会
+ *   暂停 rAF，所以这里不用 rAF。
+ *
+ * 已处理的行打上 `data-dsqe-decorated`，我们自己的改动不会引起自我循环。
  */
 export function watchMentionChips(deps: MentionDecorateDeps): () => void {
   if (typeof document === 'undefined') return () => {}
@@ -161,9 +225,14 @@ export function watchMentionChips(deps: MentionDecorateDeps): () => void {
       if (target !== null && typeof target.closest === 'function' && target.closest('[data-dsqe-filechip]') !== null) {
         continue
       }
-      schedule()
-      return
+      if (record.type === 'childList') {
+        for (const added of Array.from(record.addedNodes)) decorateFresh(added, deps)
+      } else {
+        // characterData：宿主逐字填文本，或 React 复用了同一个文本节点。
+        decorateFresh(record.target, deps)
+      }
     }
+    schedule()
   })
   observer.observe(document.body, { childList: true, subtree: true, characterData: true })
   // 兜底巡检：有的会话切换只改文本不改结构。

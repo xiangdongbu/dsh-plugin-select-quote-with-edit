@@ -116,6 +116,34 @@
      */
     var wantsClick = location.search.indexOf('autoclick=1') !== -1;
     var wantsProbe = location.search.indexOf('probe=1') !== -1;
+    var wantsSyncProbe = location.search.indexOf('syncprobe=1') !== -1;
+    if (wantsSyncProbe) {
+      /*
+       * 回归探针（mock only）：把「发送瞬间」那一帧复现出来 —— 往流里插一行带长
+       * 路径的用户消息，然后在**同一个任务的微任务里**（MutationObserver 跑完、
+       * 浏览器还没绘制）看胶囊是否已经就位。旧的 120ms 去抖在这里必然是 false。
+       */
+      (function () {
+        var path = '/Users/bu/WorkBuddy/2026-11-02-14-55-10/dsh-plugin-select-quote-with-edit/src/client/mention-decorate.ts';
+        var row = document.createElement('div');
+        row.setAttribute('data-chat-flow-kind', 'user');
+        row.setAttribute('data-submission-echo', '');
+        row.textContent = '看下 @' + path + ' 这段';
+        var result = { microtaskChip: false, chipName: null, rawTextLeft: null };
+        document.body.appendChild(row);
+        Promise.resolve().then(function () {
+          var chip = row.querySelector('[data-dsqe-filechip]');
+          result.microtaskChip = chip !== null;
+          var name = chip && chip.querySelector('.dsqe_fileChipName');
+          result.chipName = name ? name.textContent : null;
+          result.rawTextLeft = (row.textContent || '').indexOf(path) !== -1;
+          var out = document.createElement('pre');
+          out.id = 'dsqe-syncprobe';
+          out.textContent = JSON.stringify(result);
+          document.body.appendChild(out);
+        });
+      })();
+    }
     if (wantsClick || wantsProbe) {
       setTimeout(function () {
         if (wantsClick) {
