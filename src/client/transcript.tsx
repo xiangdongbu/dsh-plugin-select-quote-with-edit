@@ -240,7 +240,7 @@ function bubbleContent(
   for (const entry of placed) {
     const at = Math.max(cursor, Math.min(text.length, entry.at))
     if (at > cursor) {
-      nodes.push(...bubbleTextNodes(text.slice(cursor, at), `t-${cursor}`))
+      nodes.push(...bubbleTextNodes(beforeChip(text.slice(cursor, at)), `t-${cursor}`))
     }
     nodes.push(chip(entry.quote, entry.index))
     cursor = at
@@ -249,6 +249,22 @@ function bubbleContent(
     nodes.push(...bubbleTextNodes(text.slice(cursor), `t-${cursor}`))
   }
   return nodes
+}
+
+/**
+ * 紧贴在胶囊前面的那个换行，是排版产物，不是用户打出来的。
+ *
+ * 胶囊在协议里只是一条「位置记录」（`at` 偏移），文本里并没有它的占位符；
+ * 一旦偏移算偏了一个字符、或者编辑卡片回写文本时在块边界补了 `\n`，胶囊就会
+ * 落到换行**之后** —— 于是气泡里出现「1」独占一行、胶囊另起一行的观感，而
+ * 输入框里明明是 `1 [胶囊]` 排在一行。
+ *
+ * 这里只收掉「段尾恰好是一个换行（后面可能跟空白）」的那一个，换成空格：
+ * 胶囊接着上一段文字排，用户真正敲的换行（段中、段首连续换行）都不动。
+ */
+function beforeChip(segment: string): string {
+  if (!segment.endsWith('\n') && !/[ \t]*\n[ \t]*$/u.test(segment)) return segment
+  return segment.replace(/[ \t]*\n[ \t]*$/u, ' ')
 }
 
 /**
