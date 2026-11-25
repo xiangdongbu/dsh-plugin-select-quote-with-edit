@@ -55,11 +55,10 @@ function concealEcho(surface: Element): void {
     clearTimeout(timer)
   }
   const inner = new MutationObserver(() => {
-    if (surface.querySelector('[data-dsqe-quote-bubble]') !== null) {
-      reveal()
-      return
-    }
-    if (!looksLikeQuoteWire(surface.textContent ?? '')) reveal()
+    // 只认「我们自己的气泡接手了」。不能用「协议块不见了」当条件 —— 剥离是我们
+    // 自己做的，剥完立刻满足那条，遮罩会马上失效，于是又回到「先看到一条没有
+    // 胶囊的裸文本」。剩余情况交给 CONCEAL_MS 超时兜底。
+    if (surface.querySelector('[data-dsqe-quote-bubble]') !== null) reveal()
   })
   inner.observe(surface, { childList: true, subtree: true, characterData: true })
   const timer = setTimeout(reveal, CONCEAL_MS)
