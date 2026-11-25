@@ -654,6 +654,11 @@ body[data-dsqe-resizing='true'] {
 .dsqe-bubbleRow > .dsqe-chipCluster {
   margin: 0 3px;
   vertical-align: middle;
+  /* 行内盒的百分比 max-width 是相对**整行**（气泡内容宽度）解析的：一颗长胶囊
+     会被撑到几乎满宽，于是它前面哪怕只有「1」两个字，也没有落脚空间，胶囊被迫
+     换到下一行 —— 输入框里明明是「1 + 胶囊」排在一行的。留出 1.5em 给前面的
+     文字（一两个字符），长胶囊照旧在自身内部省略号收尾。 */
+  max-width: calc(100% - 1.5em);
 }
 .dsqe-bubbleText { min-width: 0; white-space: pre-wrap; }
 .dsqe-userImages {
