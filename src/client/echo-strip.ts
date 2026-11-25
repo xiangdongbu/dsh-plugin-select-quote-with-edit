@@ -78,9 +78,10 @@ function rewriteTextNode(node: Text): void {
 
 function stripWithin(root: Node): void {
   if (root.nodeType === Node.TEXT_NODE) {
-    rewriteTextNode(root as Text)
+    // 同样先遮再剥（理由见下面的块分支）。
     const surface = (root as Text).parentElement?.closest(SURFACES) ?? null
     if (surface !== null) concealEcho(surface)
+    rewriteTextNode(root as Text)
     return
   }
   if (root.nodeType !== Node.ELEMENT_NODE) return
@@ -88,14 +89,16 @@ function stripWithin(root: Node): void {
   const own = element.matches(SURFACES) ? element : null
   const nested = element.querySelector(SURFACES)
   if (own === null && nested === null) return
+  // 先遮再剥：剥完就认不出「这行本来带协议块」了，而遮罩正是靠这个特征决定
+  // 要不要藏 —— 顺序反了就会出现「先看到一条没有胶囊的裸文本，过一会儿胶囊才来」。
+  if (own !== null) concealEcho(own)
+  for (const surface of Array.from(element.querySelectorAll(SURFACES))) concealEcho(surface)
   const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
   let current = walker.nextNode()
   while (current) {
     rewriteTextNode(current as Text)
     current = walker.nextNode()
   }
-  if (own !== null) concealEcho(own)
-  for (const surface of Array.from(element.querySelectorAll(SURFACES))) concealEcho(surface)
 }
 
 export function watchQuoteEchoStrip(): () => void {
